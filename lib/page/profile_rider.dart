@@ -4,16 +4,16 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter_application_4/page/login.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:flutter_application_4/widgets/user_footer.dart';
+import 'package:flutter_application_4/widgets/Rider_footer.dart';
 
-class ProfilePage extends StatefulWidget {
-  const ProfilePage({super.key});
+class ProfileRiderPage extends StatefulWidget {
+  const ProfileRiderPage({super.key});
 
   @override
-  State<ProfilePage> createState() => _ProfilePageState();
+  State<ProfileRiderPage> createState() => _ProfileRiderPageState();
 }
 
-class _ProfilePageState extends State<ProfilePage> {
+class _ProfileRiderPageState extends State<ProfileRiderPage> {
   static const _brandRed = Color(0xFFE96356);
 
   final _name = 'สมชาย ใจดี';
@@ -230,7 +230,7 @@ class _ProfilePageState extends State<ProfilePage> {
       ),
 
       // ฟุตเตอร์ – โปรไฟล์คือ index 4
-      bottomNavigationBar: FooterNavBar(currentIndex: 4),
+      bottomNavigationBar: RiderFooterNavBar(currentIndex: 3),
     );
   }
 }

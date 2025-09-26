@@ -1,10 +1,11 @@
-import 'dart:math';
+import 'dart:developer';
 import 'dart:ui';
 import 'package:flutter/material.dart';
+import 'package:flutter_application_4/page/jobs.dart';
 import 'package:flutter_application_4/page/profile.dart';
 import 'package:flutter_application_4/page/register.dart';
-import 'package:firebase_core/firebase_core.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter_application_4/page/send_product.dart';
 
 class Login extends StatefulWidget {
   const Login({super.key});
@@ -18,7 +19,6 @@ class _LoginState extends State<Login> {
   final _phoneCtrl = TextEditingController();
   final _passCtrl = TextEditingController();
   bool _obscure = true;
-  final Future<FirebaseApp> firebase = Firebase.initializeApp();
 
   @override
   void dispose() {
@@ -27,40 +27,52 @@ class _LoginState extends State<Login> {
     super.dispose();
   }
 
- Future<void> _login() async {
+  Future<void> _login() async {
   final phone = _phoneCtrl.text.trim();
   final password = _passCtrl.text.trim();
-  log(_phoneCtrl as num);
-  log(_passCtrl as num);
+
+  log("phone: $phone");
+  log("password: $password");
 
   try {
     final snapshot = await FirebaseFirestore.instance
-        .collection('users')
+        .collection('user') // ✅ ตรวจสอบให้ตรงกับ collection ของคุณ
         .where('phone', isEqualTo: phone)
         .where('password', isEqualTo: password)
+        .limit(1)
         .get();
 
     if (snapshot.docs.isNotEmpty) {
       final data = snapshot.docs.first.data();
 
-      // ไปหน้า ProfilePage พร้อมส่งข้อมูล
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(
-          builder: (_) => ProfilePage(
-            name: data['name'] ?? '',
-            phone: data['phone'] ?? '',
-            role: data['role'] ?? '',
-            picture: data['picture'] ?? '',
+      final role = data['role'] ?? 'user'; // ค่า role เช่น "user" หรือ "rider"
+
+      if (role == "user") {
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(
+            builder: (_) => const SendProductPage(),
           ),
-        ),
-      );
+        );
+      } else if (role == "rider") {
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(
+            builder: (_) => const JobsPage(), // ✅ state จะเป็น _JobsPageState
+          ),
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("ไม่พบ role ที่ถูกต้อง")),
+        );
+      }
     } else {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text("เบอร์โทรหรือรหัสผ่านไม่ถูกต้อง")),
       );
     }
   } catch (e) {
+    log("Login error: $e");
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text("เกิดข้อผิดพลาด: $e")),
     );
@@ -182,8 +194,9 @@ class _LoginState extends State<Login> {
                                 validator: (v) {
                                   final t = (v ?? '').trim();
                                   if (t.isEmpty) return 'กรอกรหัสผ่านก่อนนะ';
-                                  if (t.length < 6)
+                                  if (t.length < 6) {
                                     return 'รหัสผ่านอย่างน้อย 6 ตัวอักษร';
+                                  }
                                   return null;
                                 },
                               ),
@@ -197,8 +210,7 @@ class _LoginState extends State<Login> {
                                         Navigator.push(
                                           context,
                                           MaterialPageRoute(
-                                            builder: (_) =>
-                                                const Register(),
+                                            builder: (_) => const Register(),
                                           ),
                                         );
                                       },
@@ -209,9 +221,9 @@ class _LoginState extends State<Login> {
                                     child: _RedButton(
                                       text: 'เข้าสู่ระบบ',
                                       onPressed: () {
-                                         log(1);
+                                        if (_formKey.currentState!.validate()) {
                                           _login();
-                                        
+                                        }
                                       },
                                     ),
                                   ),
@@ -233,7 +245,6 @@ class _LoginState extends State<Login> {
   }
 }
 
-/// TextField capsule
 class _CapsuleField extends StatelessWidget {
   const _CapsuleField({
     required this.controller,

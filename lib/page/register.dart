@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'dart:ui';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_application_4/page/pin_location.dart';
 import 'package:image_picker/image_picker.dart';
@@ -600,27 +601,69 @@ class _RegisterState extends State<Register> {
       ),
     ];
   }
-
-  void _submit() {
-    FocusScope.of(context).unfocus();
-    if (_formKey.currentState!.validate()) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            'สมัครสมาชิกสำเร็จ (${role == RegisterRole.user ? "ผู้ใช้งาน" : "ไรเดอร์"})',
-          ),
-        ),
-      );
-      // TODO: ส่งข้อมูลไป API พร้อมแนบ:
-      // - path รูปโปรไฟล์: _profileSavedFile?.path
-      // - path รูปยานพาหนะ: _vehicleSavedFile?.path
-      // - พิกัดหมุด: _addressPin?.latitude / _addressPin?.longitude
-    } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('กรอกข้อมูลให้ครบถ้วนก่อนสมัครสมาชิก')),
-      );
-    }
+//----------------Register----------------------------
+  Future<void> _submit() async {
+  FocusScope.of(context).unfocus();
+  if (!_formKey.currentState!.validate()) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text("กรอกข้อมูลให้ครบถ้วนก่อนสมัครสมาชิก")),
+    );
+    return;
   }
+
+  try {
+    final firestore = FirebaseFirestore.instance;
+
+    if (role == RegisterRole.user) {
+      // =============== CASE: USER ===============
+      final userRef = await firestore.collection('user').add({
+        "name": nameCtrl.text.trim(),
+        "phone": phoneCtrl.text.trim(),
+        "password": passwordCtrl.text.trim(),
+        "role": "user",
+        "picture": _profileSavedFile?.path ?? "",
+      });
+
+      await firestore.collection('user_address').add({
+        "userid": userRef.id,
+        "address":
+            "${addrNoCtrl.text}, ${subdistrictCtrl.text}, ${districtCtrl.text}, ${provinceCtrl.text}, ${zipcodeCtrl.text}",
+        "lat": _addressPin?.latitude,
+        "lng": _addressPin?.longitude,
+      });
+
+    } else if (role == RegisterRole.rider) {
+      // =============== CASE: RIDER ===============
+      final riderRef = await firestore.collection('user').add({
+        "name": riderNameCtrl.text.trim(),
+        "phone": riderPhoneCtrl.text.trim(),
+        "password": riderPasswordCtrl.text.trim(),
+        "role": "rider",
+        "picture": _profileSavedFile?.path ?? "",
+      });
+
+      await firestore.collection('rider_car').add({
+        "userid": riderRef.id,
+        "plate_number": plateCtrl.text.trim(),
+        "car_type": vehicleType,
+        "image_car": _vehicleSavedFile?.path ?? "",
+      });
+    }
+
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text("สมัครสมาชิกสำเร็จ (${role == RegisterRole.user ? "ผู้ใช้งาน" : "ไรเดอร์"}) ✅"),
+      ),
+    );
+    Navigator.pop(context); // กลับไปหน้า login
+  } catch (e) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text("เกิดข้อผิดพลาด: $e")),
+    );
+  }
+}
+
 }
 
 /* -------------------- Widgets ย่อย -------------------- */
