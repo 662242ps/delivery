@@ -1,13 +1,23 @@
-// profile_page.dart
-import 'dart:io';
+import 'dart:convert';
+import 'dart:typed_data';
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter_application_4/page/login.dart';
-import 'package:image_picker/image_picker.dart';
 import 'package:flutter_application_4/widgets/user_footer.dart';
 
 class ProfilePage extends StatefulWidget {
-  const ProfilePage({super.key});
+  final String name;
+  final String phone;
+  final String role;
+  final String picture; // base64 string
+
+  const ProfilePage({
+    super.key,
+    required this.name,
+    required this.phone,
+    required this.role,
+    required this.picture,
+  });
 
   @override
   State<ProfilePage> createState() => _ProfilePageState();
@@ -16,21 +26,12 @@ class ProfilePage extends StatefulWidget {
 class _ProfilePageState extends State<ProfilePage> {
   static const _brandRed = Color(0xFFE96356);
 
-  final _name = 'สมชาย ใจดี';
-  final _phone = '0987654321';
-
-  // (เก็บไว้เผื่อใช้ต่อในอนาคต แต่จะไม่ให้กดเปลี่ยนแล้ว)
-  final _picker = ImagePicker();
-  XFile? _avatar;
-
   void _openAddressBook() {
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(const SnackBar(content: Text('ไปสมุดที่อยู่ (TODO)')));
+    ScaffoldMessenger.of(context)
+        .showSnackBar(const SnackBar(content: Text('ไปสมุดที่อยู่ (TODO)')));
   }
 
   void _logout() {
-    // TODO: ล้าง token/session ที่นี่ถ้ามี
     Navigator.of(context).pushAndRemoveUntil(
       MaterialPageRoute(builder: (_) => const Login()),
       (route) => false,
@@ -39,6 +40,14 @@ class _ProfilePageState extends State<ProfilePage> {
 
   @override
   Widget build(BuildContext context) {
+    // แปลง base64 → Uint8List
+    Uint8List? avatarBytes;
+    try {
+      if (widget.picture.isNotEmpty) {
+        avatarBytes = const Base64Decoder().convert(widget.picture.split(",").last);
+      }
+    } catch (_) {}
+
     return Scaffold(
       body: Stack(
         children: [
@@ -59,12 +68,9 @@ class _ProfilePageState extends State<ProfilePage> {
               ),
             ),
           ),
-
-          // เนื้อหา
           SafeArea(
             child: Column(
               children: [
-                // Header แดง
                 Container(
                   decoration: const BoxDecoration(
                     color: _brandRed,
@@ -90,8 +96,6 @@ class _ProfilePageState extends State<ProfilePage> {
                     ),
                   ),
                 ),
-
-                // การ์ดโปร่งใส
                 Expanded(
                   child: Padding(
                     padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
@@ -112,23 +116,16 @@ class _ProfilePageState extends State<ProfilePage> {
                             padding: const EdgeInsets.fromLTRB(18, 20, 18, 20),
                             child: Column(
                               children: [
-                                // Avatar (กดไม่ได้)
-                                AbsorbPointer(
-                                  absorbing: true,
-                                  child: CircleAvatar(
-                                    radius: 64,
-                                    backgroundColor: const Color(0xFF0F5CA6),
-                                    backgroundImage: _avatar != null
-                                        ? FileImage(File(_avatar!.path))
-                                        : null,
-                                    child: _avatar == null
-                                        ? const Icon(
-                                            Icons.person,
-                                            color: Colors.white,
-                                            size: 72,
-                                          )
-                                        : null,
-                                  ),
+                                CircleAvatar(
+                                  radius: 64,
+                                  backgroundColor: const Color(0xFF0F5CA6),
+                                  backgroundImage: avatarBytes != null
+                                      ? MemoryImage(avatarBytes)
+                                      : null,
+                                  child: avatarBytes == null
+                                      ? const Icon(Icons.person,
+                                          color: Colors.white, size: 72)
+                                      : null,
                                 ),
                                 const SizedBox(height: 10),
                                 const Text(
@@ -139,19 +136,14 @@ class _ProfilePageState extends State<ProfilePage> {
                                   ),
                                 ),
                                 const SizedBox(height: 22),
-
-                                // เบอร์โทร
-                                _InfoRow(label: 'เบอร์โทร :', value: _phone),
-                                const SizedBox(height: 18),
-
-                                // ชื่อ-นามสกุล
                                 _InfoRow(
-                                  label: 'ชื่อ - นามสกุล :',
-                                  value: _name,
-                                ),
+                                    label: 'เบอร์โทร :',
+                                    value: widget.phone),
                                 const SizedBox(height: 18),
-
-                                // สมุดที่อยู่ + ปุ่มเลือก >
+                                _InfoRow(
+                                    label: 'ชื่อ - นามสกุล :',
+                                    value: widget.name),
+                                const SizedBox(height: 18),
                                 _InfoRow(
                                   label: 'สมุดที่อยู่',
                                   valueWidget: TextButton.icon(
@@ -168,11 +160,8 @@ class _ProfilePageState extends State<ProfilePage> {
                                           ),
                                         ),
                                         SizedBox(width: 2),
-                                        Icon(
-                                          Icons.chevron_right,
-                                          size: 24,
-                                          color: Colors.black,
-                                        ),
+                                        Icon(Icons.chevron_right,
+                                            size: 24, color: Colors.black),
                                       ],
                                     ),
                                     style: TextButton.styleFrom(
@@ -184,8 +173,6 @@ class _ProfilePageState extends State<ProfilePage> {
                                   ),
                                 ),
                                 const SizedBox(height: 36),
-
-                                // ปุ่มออกจากระบบ (สไตล์แดงตามแอป)
                                 SizedBox(
                                   width: 220,
                                   child: ElevatedButton(
@@ -193,8 +180,7 @@ class _ProfilePageState extends State<ProfilePage> {
                                       backgroundColor: _brandRed,
                                       foregroundColor: Colors.black,
                                       padding: const EdgeInsets.symmetric(
-                                        vertical: 14,
-                                      ),
+                                          vertical: 14),
                                       shape: RoundedRectangleBorder(
                                         borderRadius: BorderRadius.circular(14),
                                         side: BorderSide(
@@ -228,20 +214,14 @@ class _ProfilePageState extends State<ProfilePage> {
           ),
         ],
       ),
-
-      // ฟุตเตอร์ – โปรไฟล์คือ index 4
       bottomNavigationBar: FooterNavBar(currentIndex: 4),
     );
   }
 }
 
-/// แถวข้อมูลกรอบโค้ง ตามภาพ (มี label ซ้าย + ค่า/ปุ่ม ขวา)
 class _InfoRow extends StatelessWidget {
   const _InfoRow({required this.label, this.value, this.valueWidget})
-    : assert(
-        value != null || valueWidget != null,
-        'ต้องใส่ value หรือ valueWidget อย่างน้อยหนึ่งตัว',
-      );
+      : assert(value != null || valueWidget != null);
 
   final String label;
   final String? value;
@@ -261,7 +241,8 @@ class _InfoRow extends StatelessWidget {
           Expanded(
             child: Text(
               label,
-              style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 18),
+              style:
+                  const TextStyle(fontWeight: FontWeight.w800, fontSize: 18),
             ),
           ),
           valueWidget ??

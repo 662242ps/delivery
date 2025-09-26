@@ -1,6 +1,10 @@
+import 'dart:math';
 import 'dart:ui';
 import 'package:flutter/material.dart';
+import 'package:flutter_application_4/page/profile.dart';
 import 'package:flutter_application_4/page/register.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 
 class Login extends StatefulWidget {
   const Login({super.key});
@@ -14,6 +18,7 @@ class _LoginState extends State<Login> {
   final _phoneCtrl = TextEditingController();
   final _passCtrl = TextEditingController();
   bool _obscure = true;
+  final Future<FirebaseApp> firebase = Firebase.initializeApp();
 
   @override
   void dispose() {
@@ -22,6 +27,47 @@ class _LoginState extends State<Login> {
     super.dispose();
   }
 
+ Future<void> _login() async {
+  final phone = _phoneCtrl.text.trim();
+  final password = _passCtrl.text.trim();
+  log(_phoneCtrl as num);
+  log(_passCtrl as num);
+
+  try {
+    final snapshot = await FirebaseFirestore.instance
+        .collection('users')
+        .where('phone', isEqualTo: phone)
+        .where('password', isEqualTo: password)
+        .get();
+
+    if (snapshot.docs.isNotEmpty) {
+      final data = snapshot.docs.first.data();
+
+      // ไปหน้า ProfilePage พร้อมส่งข้อมูล
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(
+          builder: (_) => ProfilePage(
+            name: data['name'] ?? '',
+            phone: data['phone'] ?? '',
+            role: data['role'] ?? '',
+            picture: data['picture'] ?? '',
+          ),
+        ),
+      );
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("เบอร์โทรหรือรหัสผ่านไม่ถูกต้อง")),
+      );
+    }
+  } catch (e) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text("เกิดข้อผิดพลาด: $e")),
+    );
+  }
+}
+
+
   @override
   Widget build(BuildContext context) {
     final size = MediaQuery.of(context).size;
@@ -29,18 +75,15 @@ class _LoginState extends State<Login> {
 
     return Scaffold(
       backgroundColor: Colors.black,
-      // ทำให้พื้นหลัง "ไม่ขยับ" เมื่อคีย์บอร์ดขึ้น
       resizeToAvoidBottomInset: false,
       body: Stack(
         children: [
-          // BG image
           Positioned.fill(
             child: Image.asset(
               'assets/images/พื้นหลังสมัค.png',
               fit: BoxFit.cover,
             ),
           ),
-          // gradient ทับให้อ่านง่าย
           Positioned.fill(
             child: Container(
               decoration: const BoxDecoration(
@@ -52,8 +95,6 @@ class _LoginState extends State<Login> {
               ),
             ),
           ),
-
-          // เนื้อหา
           SafeArea(
             child: Center(
               child: SingleChildScrollView(
@@ -61,7 +102,6 @@ class _LoginState extends State<Login> {
                   horizontal: 20,
                   vertical: 24,
                 ),
-                // ยกเฉพาะการ์ดขึ้นตามคีย์บอร์ด (พื้นหลังไม่ขยับ)
                 child: AnimatedPadding(
                   duration: const Duration(milliseconds: 180),
                   curve: Curves.easeOut,
@@ -106,8 +146,6 @@ class _LoginState extends State<Login> {
                                 textAlign: TextAlign.center,
                               ),
                               const SizedBox(height: 18),
-
-                              // เบอร์โทร
                               _CapsuleField(
                                 controller: _phoneCtrl,
                                 label: 'เบอร์โทร',
@@ -125,8 +163,6 @@ class _LoginState extends State<Login> {
                                 },
                               ),
                               const SizedBox(height: 16),
-
-                              // รหัสผ่าน
                               _CapsuleField(
                                 controller: _passCtrl,
                                 label: 'รหัสผ่าน',
@@ -152,58 +188,30 @@ class _LoginState extends State<Login> {
                                 },
                               ),
                               const SizedBox(height: 22),
-
-                              // ปุ่ม
                               Row(
                                 children: [
                                   Expanded(
                                     child: _RedButton(
                                       text: 'สมัครสมาชิก',
                                       onPressed: () {
-                                        FocusScope.of(
-                                          context,
-                                        ).unfocus(); // เก็บคีย์บอร์ด (ถ้ามี)
                                         Navigator.push(
                                           context,
                                           MaterialPageRoute(
                                             builder: (_) =>
-                                                const Register(), // ไปหน้าสมัครสมาชิก
+                                                const Register(),
                                           ),
                                         );
                                       },
                                     ),
                                   ),
-
                                   const SizedBox(width: 16),
                                   Expanded(
                                     child: _RedButton(
                                       text: 'เข้าสู่ระบบ',
                                       onPressed: () {
-                                        FocusScope.of(context).unfocus();
-                                        // ตรวจฟอร์ม — ถ้าไม่ผ่านจะแสดง error ทันที
-                                        if (_formKey.currentState!.validate()) {
-                                          ScaffoldMessenger.of(
-                                            context,
-                                          ).showSnackBar(
-                                            SnackBar(
-                                              content: Text(
-                                                'Login ด้วย ${_phoneCtrl.text} / ${'*' * _passCtrl.text.length}',
-                                              ),
-                                            ),
-                                          );
-                                          // TODO: call API ที่นี่
-                                        } else {
-                                          // แจ้งเตือนรวมอีกชั้น (เสริม)
-                                          ScaffoldMessenger.of(
-                                            context,
-                                          ).showSnackBar(
-                                            const SnackBar(
-                                              content: Text(
-                                                'กรอกข้อมูลให้ครบถ้วนก่อนเข้าสู่ระบบ',
-                                              ),
-                                            ),
-                                          );
-                                        }
+                                         log(1);
+                                          _login();
+                                        
                                       },
                                     ),
                                   ),
@@ -225,7 +233,7 @@ class _LoginState extends State<Login> {
   }
 }
 
-/// TextField ทรงแคปซูลพร้อม label + validator
+/// TextField capsule
 class _CapsuleField extends StatelessWidget {
   const _CapsuleField({
     required this.controller,
@@ -257,9 +265,9 @@ class _CapsuleField extends StatelessWidget {
         Text(
           label,
           style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-            fontWeight: FontWeight.w700,
-            color: Colors.black87,
-          ),
+                fontWeight: FontWeight.w700,
+                color: Colors.black87,
+              ),
         ),
         const SizedBox(height: 8),
         TextFormField(
