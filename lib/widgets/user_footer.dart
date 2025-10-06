@@ -22,28 +22,27 @@ const List<UserFooterItem> kDefaultUserFooterItems = [
 class FooterNavBar extends StatelessWidget {
   FooterNavBar({
     super.key,
+    required this.userId, // ✅ ต้องส่ง userId
     this.items = kDefaultUserFooterItems,
     this.currentIndex = 0,
     this.onTap,
     List<WidgetBuilder>? pageBuilders,
     this.usePushReplacement = true,
-  }) : pageBuilders = pageBuilders ?? _defaultPageBuilders;
+  }) : pageBuilders = pageBuilders ?? _defaultPageBuilders(userId);
 
+  final String userId; // ✅ เก็บ userId
   final List<UserFooterItem> items;
   final int currentIndex;
   final ValueChanged<int>? onTap;
 
-  /// ค่าเริ่มต้นของเพจปลายทาง (ไม่ใช่ const)
-  static final List<WidgetBuilder> _defaultPageBuilders = [
-    (ctx) => const SendProductPage(),
-    (ctx) => const SendProductPage(),
-    (ctx) => const SendProductPage(),
-    (ctx) => const SendProductPage(),
-    // (ctx) => const ShippingListPage(),
-    // (ctx) => const MapPage(),
-    // (ctx) => const HistoryPage(),
-    (ctx) => const ProfilePage(),
-  ];
+  /// ✅ ค่าเริ่มต้นของเพจปลายทาง (ทุกหน้าใช้ userId)
+  static List<WidgetBuilder> _defaultPageBuilders(String userId) => [
+        (ctx) => SendProductPage(userId: userId),
+        (ctx) => SendProductPage(userId: userId),
+        (ctx) => SendProductPage(userId: userId),
+        (ctx) => SendProductPage(userId: userId),
+        (ctx) => ProfilePage(userId: userId),
+      ];
 
   final List<WidgetBuilder> pageBuilders;
   final bool usePushReplacement;
@@ -67,9 +66,8 @@ class FooterNavBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final safeIndex = (currentIndex < 0 || currentIndex >= items.length)
-        ? 0
-        : currentIndex;
+    final safeIndex =
+        (currentIndex < 0 || currentIndex >= items.length) ? 0 : currentIndex;
 
     return SafeArea(
       top: false,

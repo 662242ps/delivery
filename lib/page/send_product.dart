@@ -1,14 +1,14 @@
-// send_product_page.dart
 import 'dart:ui';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 
-// ✅ ใช้ฟุตเตอร์จากหน้า aapfooter
+// ✅ ใช้ฟุตเตอร์จากหน้า app_footer
 import 'package:flutter_application_4/widgets/user_footer.dart';
 
 class SendProductPage extends StatefulWidget {
-  const SendProductPage({super.key});
+  final String userId; // ✅ รับ userId จาก Login/FooterNavBar
+  const SendProductPage({super.key, required this.userId});
 
   @override
   State<SendProductPage> createState() => _SendProductPageState();
@@ -83,9 +83,11 @@ class _SendProductPageState extends State<SendProductPage> {
     }
     if (_formKey.currentState!.validate()) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('ส่งคำสั่ง “ส่งสินค้า” สำเร็จ')),
+        SnackBar(
+          content: Text('ส่งคำสั่ง “ส่งสินค้า” สำเร็จ โดย userId: ${widget.userId}'),
+        ),
       );
-      // TODO: call API
+      // TODO: call API พร้อมส่ง widget.userId
     }
   }
 
@@ -127,7 +129,7 @@ class _SendProductPageState extends State<SendProductPage> {
                   child: const Text(
                     'ส่งสินค้า',
                     style: TextStyle(
-                      fontSize: 26, // ลดขนาดลง
+                      fontSize: 26,
                       fontWeight: FontWeight.w900,
                       color: Colors.black,
                       shadows: [
@@ -141,19 +143,17 @@ class _SendProductPageState extends State<SendProductPage> {
                   ),
                 ),
 
-                // Card ฟอร์ม (โปร่งใส + กว้าง/สูงขึ้น)
+                // Card ฟอร์ม
                 Expanded(
                   child: Padding(
-                    padding: const EdgeInsets.fromLTRB(8, 6, 8, 6), // ลดขอบนอก
+                    padding: const EdgeInsets.fromLTRB(8, 6, 8, 6),
                     child: ClipRRect(
                       borderRadius: BorderRadius.circular(22),
                       child: BackdropFilter(
                         filter: ImageFilter.blur(sigmaX: 8, sigmaY: 8),
                         child: Container(
                           decoration: BoxDecoration(
-                            color: Colors.white.withOpacity(
-                              0.75,
-                            ), // โปร่งใสขึ้น
+                            color: Colors.white.withOpacity(0.75),
                             borderRadius: BorderRadius.circular(22),
                             border: Border.all(color: Colors.black, width: 1.8),
                           ),
@@ -163,21 +163,16 @@ class _SendProductPageState extends State<SendProductPage> {
                               thickness: 6,
                               radius: const Radius.circular(12),
                               child: ListView(
-                                padding: const EdgeInsets.fromLTRB(
-                                  14,
-                                  12,
-                                  14,
-                                  18,
-                                ),
+                                padding:
+                                    const EdgeInsets.fromLTRB(14, 12, 14, 18),
                                 children: [
                                   // ที่อยู่ผู้ส่ง
                                   _AddressBox(
                                     title: 'ที่อยู่ของคุณ',
-                                    value:
-                                        _senderAddress ??
+                                    value: _senderAddress ??
                                         'กรุณาเลือกที่อยู่ของคุณ',
                                     onTap: () {
-                                      // TODO: ไปหน้าเลือกที่อยู่
+                                      // TODO: ไปหน้าเลือกที่อยู่ โดยใช้ widget.userId
                                     },
                                   ),
                                   const SizedBox(height: 12),
@@ -185,12 +180,10 @@ class _SendProductPageState extends State<SendProductPage> {
                                   // ที่อยู่ผู้รับ
                                   _AddressBox(
                                     title: 'ที่อยู่ผู้รับสินค้า',
-                                    value:
-                                        _receiverAddress ??
+                                    value: _receiverAddress ??
                                         'กรุณาเลือกที่อยู่ผู้รับสินค้า',
                                     isPlaceholder: _receiverAddress == null,
                                     onTap: () async {
-                                      // TODO: ไปเลือกที่อยู่ผู้รับ
                                       setState(
                                         () => _receiverAddress =
                                             'ชื่อ yyyyy yyyyy | เบอร์ 09xxxxxxxx\nบ้านเลขที่ 99/xx, ซอย yy, ถนน zzz, ตำบล abc,\nอำเภอ def, จังหวัด ghi, รหัสไปรษณีย์ 12345',
@@ -209,7 +202,7 @@ class _SendProductPageState extends State<SendProductPage> {
                                         'จำนวนสินค้า : ',
                                         style: TextStyle(
                                           fontWeight: FontWeight.w900,
-                                          fontSize: 16, // ลดลง
+                                          fontSize: 16,
                                         ),
                                       ),
                                       Expanded(
@@ -232,7 +225,7 @@ class _SendProductPageState extends State<SendProductPage> {
                                         'ชิ้น',
                                         style: TextStyle(
                                           fontWeight: FontWeight.w900,
-                                          fontSize: 16, // ลดลง
+                                          fontSize: 16,
                                         ),
                                       ),
                                     ],
@@ -244,7 +237,7 @@ class _SendProductPageState extends State<SendProductPage> {
                                     'รายละเอียดสินค้า',
                                     style: TextStyle(
                                       fontWeight: FontWeight.w900,
-                                      fontSize: 16, // ลดลง
+                                      fontSize: 16,
                                     ),
                                   ),
                                   const SizedBox(height: 6),
@@ -271,7 +264,7 @@ class _SendProductPageState extends State<SendProductPage> {
                                     'รูปสินค้าที่ต้องส่ง',
                                     style: TextStyle(
                                       fontWeight: FontWeight.w900,
-                                      fontSize: 16, // ลดลง
+                                      fontSize: 16,
                                     ),
                                   ),
                                   const SizedBox(height: 8),
@@ -286,16 +279,15 @@ class _SendProductPageState extends State<SendProductPage> {
                                             color: Colors.black54,
                                             width: 1.3,
                                           ),
-                                          borderRadius: BorderRadius.circular(
-                                            16,
-                                          ),
+                                          borderRadius:
+                                              BorderRadius.circular(16),
                                         ),
-                                        height: 240, // สูงขึ้นเล็กน้อย
+                                        height: 240,
                                         alignment: Alignment.center,
                                         child: _productXFile == null
                                             ? const Icon(
                                                 Icons.inventory_2_outlined,
-                                                size: 88, // ลดไอคอนนิดนึง
+                                                size: 88,
                                                 color: Colors.black38,
                                               )
                                             : Image.file(
@@ -316,9 +308,8 @@ class _SendProductPageState extends State<SendProductPage> {
                                         child: _RedButton(
                                           text: 'ล้างข้อมูล',
                                           onPressed: _clear,
-                                          background: _brandRed.withOpacity(
-                                            0.9,
-                                          ),
+                                          background:
+                                              _brandRed.withOpacity(0.9),
                                         ),
                                       ),
                                       const SizedBox(width: 12),
@@ -344,7 +335,10 @@ class _SendProductPageState extends State<SendProductPage> {
           ),
         ],
       ),
-      bottomNavigationBar: FooterNavBar(currentIndex: 0),
+      bottomNavigationBar: FooterNavBar(
+        currentIndex: 0,
+        userId: widget.userId, // ✅ ส่ง userId ต่อไป
+      ),
     );
   }
 }
@@ -367,11 +361,10 @@ class _AddressBox extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return _RoundedArea(
-      padding: const EdgeInsets.fromLTRB(12, 10, 6, 10), // กระชับกว่าเดิม
+      padding: const EdgeInsets.fromLTRB(12, 10, 6, 10),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // ข้อความ
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -380,7 +373,7 @@ class _AddressBox extends StatelessWidget {
                   title,
                   style: const TextStyle(
                     fontWeight: FontWeight.w900,
-                    fontSize: 18, // ลดลง
+                    fontSize: 18,
                   ),
                 ),
                 const SizedBox(height: 4),
@@ -389,7 +382,7 @@ class _AddressBox extends StatelessWidget {
                   style: TextStyle(
                     fontSize: 14.5,
                     color: isPlaceholder ? Colors.black45 : Colors.black87,
-                    fontWeight: FontWeight.w400, // หรือเอาบรรทัดนี้ออกเลยก็ได้
+                    fontWeight: FontWeight.w400,
                     height: 1.35,
                   ),
                 ),
@@ -465,7 +458,7 @@ class _RoundedArea extends StatelessWidget {
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
       decoration: BoxDecoration(
-        color: const Color(0xFFF2F2F2).withOpacity(0.85), // โปร่งขึ้น
+        color: const Color(0xFFF2F2F2).withOpacity(0.85),
         borderRadius: BorderRadius.circular(14),
         border: Border.all(color: Colors.black54, width: 1.3),
       ),

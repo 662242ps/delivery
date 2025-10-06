@@ -1,10 +1,10 @@
-// jobs_page.dart
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter_application_4/widgets/rider_footer.dart';
 
 class JobsPage extends StatefulWidget {
-  const JobsPage({super.key});
+  final String userId; // ✅ รับ userId จาก login/footer
+  const JobsPage({super.key, required this.userId});
 
   @override
   State<JobsPage> createState() => _JobsPageState();
@@ -130,7 +130,10 @@ class _JobsPageState extends State<JobsPage> {
       ),
 
       // ฟุตเตอร์ของไรเดอร์ (แท็บที่ 0 = ดูงาน)
-      bottomNavigationBar: RiderFooterNavBar(currentIndex: 0),
+      bottomNavigationBar: RiderFooterNavBar(
+        currentIndex: 0,
+        userId: widget.userId, // ✅ ส่ง userId ต่อไป
+      ),
     );
   }
 }

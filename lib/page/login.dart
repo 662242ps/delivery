@@ -28,57 +28,60 @@ class _LoginState extends State<Login> {
   }
 
   Future<void> _login() async {
-  final phone = _phoneCtrl.text.trim();
-  final password = _passCtrl.text.trim();
+    final phone = _phoneCtrl.text.trim();
+    final password = _passCtrl.text.trim();
 
-  log("phone: $phone");
-  log("password: $password");
+    log("phone: $phone");
+    log("password: $password");
 
-  try {
-    final snapshot = await FirebaseFirestore.instance
-        .collection('user') // ✅ ตรวจสอบให้ตรงกับ collection ของคุณ
-        .where('phone', isEqualTo: phone)
-        .where('password', isEqualTo: password)
-        .limit(1)
-        .get();
+    try {
+      final snapshot = await FirebaseFirestore.instance
+          .collection('user')
+          .where('phone', isEqualTo: phone)
+          .where('password', isEqualTo: password)
+          .limit(1)
+          .get();
 
-    if (snapshot.docs.isNotEmpty) {
-      final data = snapshot.docs.first.data();
+      if (snapshot.docs.isNotEmpty) {
+        final doc = snapshot.docs.first;     // ✅ DocumentSnapshot
+        final data = doc.data();
+        final docId = doc.id;                // ✅ Document ID ของ user
 
-      final role = data['role'] ?? 'user'; // ค่า role เช่น "user" หรือ "rider"
+        log("Login success: $docId, role=${data['role']}");
 
-      if (role == "user") {
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(
-            builder: (_) => const SendProductPage(),
-          ),
-        );
-      } else if (role == "rider") {
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(
-            builder: (_) => const JobsPage(), // ✅ state จะเป็น _JobsPageState
-          ),
-        );
+        final role = data['role'] ?? 'user';
+
+        if (role == "user") {
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(
+              builder: (_) => SendProductPage(userId: docId),  // ✅ ส่ง userId
+            ),
+          );
+        } else if (role == "rider") {
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(
+              builder: (_) => JobsPage(userId: docId),         // ✅ ส่ง userId
+            ),
+          );
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text("ไม่พบ role ที่ถูกต้อง")),
+          );
+        }
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("ไม่พบ role ที่ถูกต้อง")),
+          const SnackBar(content: Text("เบอร์โทรหรือรหัสผ่านไม่ถูกต้อง")),
         );
       }
-    } else {
+    } catch (e) {
+      log("Login error: $e");
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("เบอร์โทรหรือรหัสผ่านไม่ถูกต้อง")),
+        SnackBar(content: Text("เกิดข้อผิดพลาด: $e")),
       );
     }
-  } catch (e) {
-    log("Login error: $e");
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text("เกิดข้อผิดพลาด: $e")),
-    );
   }
-}
-
 
   @override
   Widget build(BuildContext context) {

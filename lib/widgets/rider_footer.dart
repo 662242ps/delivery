@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_application_4/page/jobs.dart';
-import 'package:flutter_application_4/page/profile.dart';
+import 'package:flutter_application_4/page/profile_rider.dart';
 
 const Color kBrandRed = Color(0xFFE96356);
 
@@ -11,21 +11,35 @@ class RiderFooterItem {
 }
 
 class RiderFooterNavBar extends StatelessWidget {
-  const RiderFooterNavBar({
+  final String userId; // ✅ เก็บ userId
+  final int currentIndex;
+  final ValueChanged<int>? onTap;
+  final List<WidgetBuilder> pageBuilders;
+
+  const RiderFooterNavBar._internal({
     super.key,
+    required this.userId,
     this.currentIndex = 0,
     this.onTap,
-    this.pageBuilders,
+    required this.pageBuilders,
   });
 
-  /// แท็บที่ active อยู่ (0=ดูงาน, 1=ประวัติ, 2=ยานพาหนะ, 3=โปรไฟล์)
-  final int currentIndex;
-
-  /// callback ถ้าอยากจัดการ state เอง (จะไม่ถูกเรียกเมื่อมีการนำทางด้วย pageBuilders)
-  final ValueChanged<int>? onTap;
-
-  /// ถ้า null จะใช้ชุดดีฟอลต์ด้านล่างนี้ให้อัตโนมัติ
-  final List<WidgetBuilder>? pageBuilders;
+  /// ✅ Factory Constructor ใช้เพื่อคำนวณ pageBuilders หลังจากได้ userId แล้ว
+  factory RiderFooterNavBar({
+    Key? key,
+    required String userId,
+    int currentIndex = 0,
+    ValueChanged<int>? onTap,
+    List<WidgetBuilder>? pageBuilders,
+  }) {
+    return RiderFooterNavBar._internal(
+      key: key,
+      userId: userId,
+      currentIndex: currentIndex,
+      onTap: onTap,
+      pageBuilders: pageBuilders ?? _defaultPageBuilders(userId),
+    );
+  }
 
   static const _items = <RiderFooterItem>[
     RiderFooterItem('ดูงาน', 12),
@@ -34,30 +48,23 @@ class RiderFooterNavBar extends StatelessWidget {
     RiderFooterItem('โปรไฟล์', 9),
   ];
 
-  /// ดีฟอลต์: ไปยัง 4 หน้าตามที่ระบุ
-  static final List<WidgetBuilder> _defaultPageBuilders = <WidgetBuilder>[
-    (ctx) => const JobsPage(), // ดูงาน
-    (ctx) => const JobsPage(),
-    (ctx) => const JobsPage(),
-    (ctx) => const ProfilePage(),
-    // (ctx) => const RiderHistoryPage(), // ประวัติ
-    // (ctx) => const VehiclePage(), // ยานพาหนะ
-    // (ctx) => const ProfilePage(), // โปรไฟล์
-  ];
+  /// ✅ ฟังก์ชันสร้างเพจ พร้อมส่ง userId
+  static List<WidgetBuilder> _defaultPageBuilders(String userId) => [
+        (ctx) => JobsPage(userId: userId),        // ✅ ส่ง userId
+        (ctx) => JobsPage(userId: userId),        // TODO: HistoryPage
+        (ctx) => JobsPage(userId: userId),        // TODO: VehiclePage
+        (ctx) => ProfileRiderPage(userId: userId) // ✅ ส่ง userId
+      ];
 
   String _iconPath(int base, bool active) =>
       'assets/Icons/${active ? base + 1 : base}.png';
 
   void _handleTap(BuildContext context, int index) {
-    final builders = pageBuilders ?? _defaultPageBuilders;
-    // ถ้ามีครบ 4 ตัว: นำทางด้วย Navigator (แทนการเรียก onTap)
-    if (builders.length == _items.length) {
-      Navigator.of(
-        context,
-      ).pushReplacement(MaterialPageRoute(builder: builders[index]));
-      return;
+    if (index >= 0 && index < pageBuilders.length) {
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(builder: pageBuilders[index]),
+      );
     }
-    // ไม่ได้ให้ builders ครบ → ส่ง index กลับไปให้หน้าปัจจุบันจัดการเอง
     onTap?.call(index);
   }
 
