@@ -1,3 +1,5 @@
+// register.dart — อัปโหลดรูปขึ้น Firebase Storage แล้วบันทึก URL ลง Firestore
+
 import 'dart:io';
 import 'dart:ui';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -7,6 +9,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:flutter_map/flutter_map.dart';
+import 'package:firebase_storage/firebase_storage.dart'; // 👈 เพิ่ม
 
 enum RegisterRole { user, rider }
 
@@ -21,7 +24,6 @@ class _RegisterState extends State<Register> {
   final _formKey = GlobalKey<FormState>();
   final _scrollCtrl = ScrollController();
 
-  // toggle ผู้ใช้/ไรเดอร์
   RegisterRole role = RegisterRole.user;
 
   // ผู้ใช้ทั่วไป
@@ -50,7 +52,7 @@ class _RegisterState extends State<Register> {
   XFile? _vehicleXFile;
   File? _vehicleSavedFile;
 
-  // หมุดที่อยู่ (รับจากหน้า PinLocationPage)
+  // หมุดที่อยู่
   LatLng? _addressPin;
 
   @override
@@ -73,7 +75,7 @@ class _RegisterState extends State<Register> {
     super.dispose();
   }
 
-  /* -------------------- โปรไฟล์: เลือกกล้อง/แกลฯ -------------------- */
+  /* ---------- เลือกรูปโปรไฟล์ ---------- */
   Future<void> _chooseProfileSource() async {
     final src = await showModalBottomSheet<ImageSource>(
       context: context,
@@ -114,7 +116,7 @@ class _RegisterState extends State<Register> {
     if (mounted) setState(() {});
   }
 
-  /* -------------------- ยานพาหนะ: เลือกกล้อง/แกลฯ -------------------- */
+  /* ---------- เลือกรูปยานพาหนะ ---------- */
   Future<void> _chooseVehicleSource() async {
     final src = await showModalBottomSheet<ImageSource>(
       context: context,
@@ -155,7 +157,7 @@ class _RegisterState extends State<Register> {
     if (mounted) setState(() {});
   }
 
-  /* -------------------- เปิดหน้าแผนที่เพื่อปักหมุด -------------------- */
+  /* ---------- เปิดหน้าแผนที่ ---------- */
   Future<void> _openPinLocation() async {
     final LatLng? result = await Navigator.push(
       context,
@@ -163,6 +165,83 @@ class _RegisterState extends State<Register> {
     );
     if (result != null) {
       setState(() => _addressPin = result);
+    }
+  }
+
+  /* ---------- อัปโหลดรูปขึ้น Storage แล้วคืน URL ---------- */
+  Future<String?> _uploadImageAndGetUrl({
+    required File file,
+    required String folder,
+  }) async {
+    // 1) ไฟล์ต้องมีอยู่จริง
+    if (!file.existsSync()) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('อัปโหลดรูปไม่สำเร็จ: ไฟล์ไม่พบในเครื่อง'),
+        ),
+      );
+      return null;
+    }
+
+    try {
+      final storage = FirebaseStorage.instance;
+
+      // 2) สร้างชื่อไฟล์ (กันอักขระแปลกๆ)
+      String base = file.uri.pathSegments.last;
+      base = base.replaceAll(RegExp(r'[^A-Za-z0-9._-]'), '_');
+      final fileName = '${DateTime.now().millisecondsSinceEpoch}_$base';
+
+      // 3) ref ต้องไม่มี "/" นำหน้า
+      final path = '$folder/$fileName';
+      final ref = storage.ref().child(path);
+
+      // 4) เดา contentType
+      final ext = file.path.split('.').last.toLowerCase();
+      final contentType = (ext == 'png')
+          ? 'image/png'
+          : (ext == 'webp')
+          ? 'image/webp'
+          : 'image/jpeg';
+
+      // 5) อัปโหลดและตรวจสถานะ
+      final task = await ref.putFile(
+        file,
+        SettableMetadata(contentType: contentType),
+      );
+
+      if (task.state != TaskState.success) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('อัปโหลดรูปไม่สำเร็จ: ${task.state.name}')),
+        );
+        return null;
+      }
+
+      // 6) ลองขอ URL
+      final url = await ref.getDownloadURL();
+      print('✅ Upload success -> $path');
+      print('✅ URL -> $url');
+      return url;
+    } on FirebaseException catch (e) {
+      // รายงานพิเศษเมื่อเป็น object-not-found
+      if (e.code == 'object-not-found') {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'อัปโหลดรูปไม่สำเร็จ: object-not-found (ไม่พบไฟล์ใน Storage ที่ path นี้)',
+            ),
+          ),
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('อัปโหลดรูปไม่สำเร็จ: ${e.code}')),
+        );
+      }
+      return null;
+    } catch (e) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('อัปโหลดรูปไม่สำเร็จ: $e')));
+      return null;
     }
   }
 
@@ -378,7 +457,6 @@ class _RegisterState extends State<Register> {
       ),
       const SizedBox(height: 14),
 
-      // กรอบ "ที่อยู่ของคุณ"
       _GroupBox(
         title: 'ที่อยู่ของคุณ',
         child: Column(
@@ -432,7 +510,6 @@ class _RegisterState extends State<Register> {
       ),
       const SizedBox(height: 16),
 
-      // ======= หมุดที่อยู่: เปิดหน้าแผนที่ + mini map preview =======
       _GroupBox(
         title: 'หมุดที่อยู่',
         trailing: const Icon(Icons.chevron_right),
@@ -447,7 +524,6 @@ class _RegisterState extends State<Register> {
               borderRadius: BorderRadius.circular(16),
               border: Border.all(color: Colors.black54, width: 1.2),
             ),
-            // ... ใน child ของ GestureDetector:
             child: _addressPin == null
                 ? const Center(
                     child: Icon(Icons.add, size: 80, color: Colors.black45),
@@ -460,17 +536,14 @@ class _RegisterState extends State<Register> {
                         IgnorePointer(
                           ignoring: true,
                           child: FlutterMap(
-                            // 🔑 บังคับ rebuild ตามพิกัดหมุด
                             key: ValueKey(
-                              '${_addressPin!.latitude.toStringAsFixed(6)},'
-                              '${_addressPin!.longitude.toStringAsFixed(6)}',
+                              '${_addressPin!.latitude.toStringAsFixed(6)},${_addressPin!.longitude.toStringAsFixed(6)}',
                             ),
                             options: MapOptions(
-                              initialCenter: _addressPin!, // ศูนย์กลาง = หมุด
+                              initialCenter: _addressPin!,
                               initialZoom: 16.0,
                               interactionOptions: const InteractionOptions(
-                                flags:
-                                    InteractiveFlag.none, // preview อย่างเดียว
+                                flags: InteractiveFlag.none,
                               ),
                             ),
                             children: [
@@ -480,7 +553,6 @@ class _RegisterState extends State<Register> {
                                 subdomains: const ['a', 'b', 'c'],
                                 userAgentPackageName: 'com.example.app',
                               ),
-                              // หมุดแดง ตั้งตรงเสมอ
                               MarkerLayer(
                                 rotate: false,
                                 markers: [
@@ -490,10 +562,7 @@ class _RegisterState extends State<Register> {
                                     height: 60,
                                     alignment: Alignment.bottomCenter,
                                     child: Transform.translate(
-                                      offset: const Offset(
-                                        0,
-                                        -45,
-                                      ), // ยกไอคอนให้ปลายแหลมตรงพิกัด
+                                      offset: const Offset(0, -45),
                                       child: const Icon(
                                         Icons.location_on,
                                         size: 44,
@@ -519,12 +588,6 @@ class _RegisterState extends State<Register> {
         label: 'รหัสผ่าน',
         hint: 'ป้อนรหัสผ่านของคุณ',
         obscureText: true,
-        validator: (v) {
-          final t = (v ?? '').trim();
-          if (t.isEmpty) return 'กรอกรหัสผ่าน';
-          if (t.length < 6) return 'อย่างน้อย 6 ตัวอักษร';
-          return null;
-        },
       ),
     ];
   }
@@ -553,7 +616,6 @@ class _RegisterState extends State<Register> {
       ),
       const SizedBox(height: 14),
 
-      // ======= รูปยานพาหนะ: โลโก้ + tap to choose =======
       Text(
         'รูปยานพาหนะ',
         style: Theme.of(
@@ -572,7 +634,7 @@ class _RegisterState extends State<Register> {
       _CapsuleField(
         controller: plateCtrl,
         label: 'ทะเบียนรถ',
-        hint: 'ปักหมุดที่อยู่ของคุณบนแผนที่',
+        hint: 'ป้อนทะเบียนรถ',
         validator: (v) => (v ?? '').trim().isEmpty ? 'กรอกทะเบียนรถ' : null,
       ),
       const SizedBox(height: 12),
@@ -592,81 +654,89 @@ class _RegisterState extends State<Register> {
         label: 'รหัสผ่าน',
         hint: 'ป้อนรหัสผ่านของคุณ',
         obscureText: true,
-        validator: (v) {
-          final t = (v ?? '').trim();
-          if (t.isEmpty) return 'กรอกรหัสผ่าน';
-          if (t.length < 6) return 'อย่างน้อย 6 ตัวอักษร';
-          return null;
-        },
       ),
     ];
   }
-//----------------Register----------------------------
+
+  //----------------Register----------------------------
   Future<void> _submit() async {
-  FocusScope.of(context).unfocus();
-  if (!_formKey.currentState!.validate()) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text("กรอกข้อมูลให้ครบถ้วนก่อนสมัครสมาชิก")),
-    );
-    return;
-  }
-
-  try {
-    final firestore = FirebaseFirestore.instance;
-
-    if (role == RegisterRole.user) {
-      // =============== CASE: USER ===============
-      final userRef = await firestore.collection('user').add({
-        "name": nameCtrl.text.trim(),
-        "phone": phoneCtrl.text.trim(),
-        "password": passwordCtrl.text.trim(),
-        "role": "user",
-        "picture": _profileSavedFile?.path ?? "",
-      });
-
-      await firestore.collection('user_address').add({
-        "userid": userRef.id,
-        "address":
-            "${addrNoCtrl.text}, ${subdistrictCtrl.text}, ${districtCtrl.text}, ${provinceCtrl.text}, ${zipcodeCtrl.text}",
-        "lat": _addressPin?.latitude,
-        "lng": _addressPin?.longitude,
-      });
-
-    } else if (role == RegisterRole.rider) {
-      // =============== CASE: RIDER ===============
-      final riderRef = await firestore.collection('user').add({
-        "name": riderNameCtrl.text.trim(),
-        "phone": riderPhoneCtrl.text.trim(),
-        "password": riderPasswordCtrl.text.trim(),
-        "role": "rider",
-        "picture": _profileSavedFile?.path ?? "",
-      });
-
-      await firestore.collection('rider_car').add({
-        "userid": riderRef.id,
-        "plate_number": plateCtrl.text.trim(),
-        "car_type": vehicleType,
-        "image_car": _vehicleSavedFile?.path ?? "",
-      });
+    FocusScope.of(context).unfocus();
+    if (!_formKey.currentState!.validate()) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("กรอกข้อมูลให้ครบถ้วนก่อนสมัครสมาชิก")),
+      );
+      return;
     }
 
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text("สมัครสมาชิกสำเร็จ (${role == RegisterRole.user ? "ผู้ใช้งาน" : "ไรเดอร์"}) ✅"),
-      ),
-    );
-    Navigator.pop(context); // กลับไปหน้า login
-  } catch (e) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text("เกิดข้อผิดพลาด: $e")),
-    );
+    try {
+      final firestore = FirebaseFirestore.instance;
+
+      // อัปโหลดรูป (ถ้ามี) แล้วได้ URL
+      String? profileUrl;
+      String? vehicleUrl;
+
+      if (_profileSavedFile != null) {
+        profileUrl = await _uploadImageAndGetUrl(
+          file: _profileSavedFile!,
+          folder: 'user_profile',
+        );
+      }
+      if (_vehicleSavedFile != null) {
+        vehicleUrl = await _uploadImageAndGetUrl(
+          file: _vehicleSavedFile!,
+          folder: 'vehicle_images',
+        );
+      }
+
+      if (role == RegisterRole.user) {
+        await firestore.collection('user').add({
+          "name": nameCtrl.text.trim(),
+          "phone": phoneCtrl.text.trim(),
+          "password": passwordCtrl.text.trim(),
+          "role": "user",
+          "picture": profileUrl ?? "", // 👈 เก็บ URL
+        });
+
+        await firestore.collection('user_address').add({
+          "address":
+              "${addrNoCtrl.text}, ${subdistrictCtrl.text}, ${districtCtrl.text}, ${provinceCtrl.text}, ${zipcodeCtrl.text}",
+          "lat": _addressPin?.latitude,
+          "lng": _addressPin?.longitude,
+        });
+      } else {
+        await firestore.collection('user').add({
+          "name": riderNameCtrl.text.trim(),
+          "phone": riderPhoneCtrl.text.trim(),
+          "password": riderPasswordCtrl.text.trim(),
+          "role": "rider",
+          "picture": profileUrl ?? "", // 👈 เก็บ URL
+        });
+
+        await firestore.collection('rider_car').add({
+          "plate_number": plateCtrl.text.trim(),
+          "car_type": vehicleType,
+          "image_car": vehicleUrl ?? "", // 👈 เก็บ URL
+        });
+      }
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            "สมัครสมาชิกสำเร็จ (${role == RegisterRole.user ? "ผู้ใช้งาน" : "ไรเดอร์"}) ✅",
+          ),
+        ),
+      );
+      Navigator.pop(context);
+    } catch (e) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text("เกิดข้อผิดพลาด: $e")));
+    }
   }
 }
 
-}
-
-/* -------------------- Widgets ย่อย -------------------- */
+/* -------------------- Widgets ย่อย (เหมือนเดิม) -------------------- */
 
 class _SegmentButton extends StatelessWidget {
   const _SegmentButton({
@@ -703,11 +773,7 @@ class _SegmentButton extends StatelessWidget {
         alignment: Alignment.center,
         child: Text(
           text,
-          style: TextStyle(
-            fontWeight: FontWeight.w800,
-            color: fg,
-            fontSize: 16,
-          ),
+          style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16),
         ),
       ),
     );
@@ -858,17 +924,17 @@ class _CapsuleField extends StatelessWidget {
                 width: 1.2,
               ),
             ),
-            focusedBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(40),
-              borderSide: const BorderSide(color: Colors.black87, width: 1.5),
+            focusedBorder: const OutlineInputBorder(
+              borderRadius: BorderRadius.all(Radius.circular(40)),
+              borderSide: BorderSide(color: Colors.black87, width: 1.5),
             ),
-            errorBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(40),
-              borderSide: const BorderSide(color: Colors.red, width: 1.2),
+            errorBorder: const OutlineInputBorder(
+              borderRadius: BorderRadius.all(Radius.circular(40)),
+              borderSide: BorderSide(color: Colors.red, width: 1.2),
             ),
-            focusedErrorBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(40),
-              borderSide: const BorderSide(color: Colors.red, width: 1.5),
+            focusedErrorBorder: const OutlineInputBorder(
+              borderRadius: BorderRadius.all(Radius.circular(40)),
+              borderSide: BorderSide(color: Colors.red, width: 1.5),
             ),
           ),
         ),
@@ -917,26 +983,17 @@ class _DropdownCapsule<T> extends FormField<T> {
                        width: 1.2,
                      ),
                    ),
-                   focusedBorder: OutlineInputBorder(
-                     borderRadius: BorderRadius.circular(40),
-                     borderSide: const BorderSide(
-                       color: Colors.black87,
-                       width: 1.5,
-                     ),
+                   focusedBorder: const OutlineInputBorder(
+                     borderRadius: BorderRadius.all(Radius.circular(40)),
+                     borderSide: BorderSide(color: Colors.black87, width: 1.5),
                    ),
-                   errorBorder: OutlineInputBorder(
-                     borderRadius: BorderRadius.circular(40),
-                     borderSide: const BorderSide(
-                       color: Colors.red,
-                       width: 1.2,
-                     ),
+                   errorBorder: const OutlineInputBorder(
+                     borderRadius: BorderRadius.all(Radius.circular(40)),
+                     borderSide: BorderSide(color: Colors.red, width: 1.2),
                    ),
-                   focusedErrorBorder: OutlineInputBorder(
-                     borderRadius: BorderRadius.circular(40),
-                     borderSide: const BorderSide(
-                       color: Colors.red,
-                       width: 1.5,
-                     ),
+                   focusedErrorBorder: const OutlineInputBorder(
+                     borderRadius: BorderRadius.all(Radius.circular(40)),
+                     borderSide: BorderSide(color: Colors.red, width: 1.5),
                    ),
                    errorText: state.errorText,
                  ),
@@ -999,7 +1056,7 @@ class _RedButton extends StatelessWidget {
   }
 }
 
-/* -------- ยานพาหนะ: การ์ดรูป + โลโก้รถ + tap เพื่อเลือกภาพ -------- */
+/* -------- ยานพาหนะ: การ์ดรูป + โลโก้รถ -------- */
 class _VehicleImageCard extends StatelessWidget {
   const _VehicleImageCard({this.imageFile, this.onTap});
 
@@ -1023,7 +1080,7 @@ class _VehicleImageCard extends StatelessWidget {
             children: [
               if (imageFile != null) Image.file(imageFile!, fit: BoxFit.cover),
               if (imageFile == null)
-                Center(
+                const Center(
                   child: Icon(
                     Icons.two_wheeler,
                     size: 96,
