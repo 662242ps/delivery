@@ -3,11 +3,11 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter_application_4/page/login.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:flutter_application_4/widgets/rider_footer.dart';
+import 'package:flutter_application_4/widgets/rider_footer.dart'; // ✅ ใช้ lowercase
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 class ProfileRiderPage extends StatefulWidget {
-  final String userId;
+  final String userId; // ✅ รับ userId จาก Login
   const ProfileRiderPage({super.key, required this.userId});
 
   @override
@@ -20,7 +20,7 @@ class _ProfileRiderPageState extends State<ProfileRiderPage> {
   final _picker = ImagePicker();
   XFile? _avatar;
 
-  late Future<Map<String, dynamic>?> _futureRider;
+  late Future<Map<String, dynamic>?> _futureRider; // ✅ เก็บ future
 
   @override
   void initState() {
@@ -28,31 +28,23 @@ class _ProfileRiderPageState extends State<ProfileRiderPage> {
     _futureRider = _getRiderData();
   }
 
+  /// ✅ ดึงข้อมูล Rider จาก Firestore
   Future<Map<String, dynamic>?> _getRiderData() async {
     final doc = await FirebaseFirestore.instance
-        .collection('user')
+        .collection('user') // ถ้า rider แยก collection ต้องแก้ตรงนี้
         .doc(widget.userId)
         .get();
-    if (doc.exists) return doc.data();
+
+    if (doc.exists) {
+      return doc.data();
+    }
     return null;
   }
 
-  // 🔑 ช่วยเลือก ImageProvider ให้ถูกประเภท (URL/ไฟล์โลคอล)
-  ImageProvider? _imageProviderFrom(String? picture) {
-    if (picture == null || picture.isEmpty) return null;
-
-    final p = picture.trim();
-    final isHttp = p.startsWith('http://') || p.startsWith('https://');
-    if (isHttp) return NetworkImage(p);
-
-    // รองรับรูปแบบ file:// และพาธไฟล์ปกติ
-    try {
-      final file = p.startsWith('file://')
-          ? File(Uri.parse(p).toFilePath())
-          : File(p);
-      if (file.existsSync()) return FileImage(file);
-    } catch (_) {}
-    return null; // ให้ CircleAvatar แสดงไอคอนแทน
+  void _openAddressBook() {
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('ไปสมุดที่อยู่ (TODO)')));
   }
 
   void _logout() {
@@ -78,9 +70,7 @@ class _ProfileRiderPageState extends State<ProfileRiderPage> {
           final rider = snapshot.data!;
           final name = rider['name'] ?? '-';
           final phone = rider['phone'] ?? '-';
-          final picture =
-              rider['picture'] as String?; // อาจเป็น URL หรือพาธไฟล์
-          final avatarProvider = _imageProviderFrom(picture);
+          final picture = rider['picture']; // ✅ URL จาก Firestore
 
           return Stack(
             children: [
@@ -104,6 +94,7 @@ class _ProfileRiderPageState extends State<ProfileRiderPage> {
               SafeArea(
                 child: Column(
                   children: [
+                    // Header
                     Container(
                       decoration: const BoxDecoration(
                         color: _brandRed,
@@ -129,6 +120,8 @@ class _ProfileRiderPageState extends State<ProfileRiderPage> {
                         ),
                       ),
                     ),
+
+                    // การ์ดข้อมูล
                     Expanded(
                       child: Padding(
                         padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
@@ -154,11 +147,16 @@ class _ProfileRiderPageState extends State<ProfileRiderPage> {
                                 ),
                                 child: Column(
                                   children: [
+                                    // Avatar
                                     CircleAvatar(
                                       radius: 64,
                                       backgroundColor: const Color(0xFF0F5CA6),
-                                      backgroundImage: avatarProvider,
-                                      child: avatarProvider == null
+                                      backgroundImage:
+                                          (picture != null && picture != "")
+                                          ? NetworkImage(picture)
+                                                as ImageProvider
+                                          : null,
+                                      child: (picture == null || picture == "")
                                           ? const Icon(
                                               Icons.person,
                                               color: Colors.white,
@@ -176,14 +174,18 @@ class _ProfileRiderPageState extends State<ProfileRiderPage> {
                                     ),
                                     const SizedBox(height: 22),
 
+                                    // เบอร์โทร
                                     _InfoRow(label: 'เบอร์โทร :', value: phone),
                                     const SizedBox(height: 18),
+
+                                    // ชื่อ - นามสกุล
                                     _InfoRow(
                                       label: 'ชื่อ - นามสกุล :',
                                       value: name,
                                     ),
                                     const SizedBox(height: 18),
 
+                                    // Logout button
                                     SizedBox(
                                       width: 220,
                                       child: ElevatedButton(
@@ -232,6 +234,7 @@ class _ProfileRiderPageState extends State<ProfileRiderPage> {
           );
         },
       ),
+      // ✅ ส่ง userId ให้ RiderFooterNavBar ด้วย
       bottomNavigationBar: RiderFooterNavBar(
         currentIndex: 3,
         userId: widget.userId,
@@ -240,10 +243,13 @@ class _ProfileRiderPageState extends State<ProfileRiderPage> {
   }
 }
 
-/* ---- Info Row ---- */
+/// แถวข้อมูลกรอบโค้ง
 class _InfoRow extends StatelessWidget {
   const _InfoRow({required this.label, this.value, this.valueWidget})
-    : assert(value != null || valueWidget != null);
+    : assert(
+        value != null || valueWidget != null,
+        'ต้องใส่ value หรือ valueWidget อย่างน้อยหนึ่งตัว',
+      );
 
   final String label;
   final String? value;

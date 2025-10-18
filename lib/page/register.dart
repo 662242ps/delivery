@@ -1,4 +1,4 @@
-// register.dart — อัปโหลดรูปขึ้น Firebase Storage แล้วบันทึก URL ลง Firestore
+// register.dart — อัปโหลดรูปไป Supabase Storage แล้วเก็บ public URL ไว้ใน Firestore
 
 import 'dart:io';
 import 'dart:ui';
@@ -9,7 +9,12 @@ import 'package:image_picker/image_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:flutter_map/flutter_map.dart';
-import 'package:firebase_storage/firebase_storage.dart'; // 👈 เพิ่ม
+import 'package:supabase_flutter/supabase_flutter.dart';
+
+// ========= ชื่อบัคเก็ตที่ใช้งาน =========
+// ต้องมีอยู่จริงใน Supabase Storage และเปิด Public + มี RLS policy ที่ให้ anon SELECT/INSERT
+const kBucketProfile = 'avatars';
+const kBucketVehicle = 'avatars';
 
 enum RegisterRole { user, rider }
 
@@ -75,7 +80,7 @@ class _RegisterState extends State<Register> {
     super.dispose();
   }
 
-  /* ---------- เลือกรูปโปรไฟล์ ---------- */
+  /* -------------------- โปรไฟล์: เลือกกล้อง/แกลฯ -------------------- */
   Future<void> _chooseProfileSource() async {
     final src = await showModalBottomSheet<ImageSource>(
       context: context,
@@ -116,7 +121,7 @@ class _RegisterState extends State<Register> {
     if (mounted) setState(() {});
   }
 
-  /* ---------- เลือกรูปยานพาหนะ ---------- */
+  /* -------------------- ยานพาหนะ: เลือกกล้อง/แกลฯ -------------------- */
   Future<void> _chooseVehicleSource() async {
     final src = await showModalBottomSheet<ImageSource>(
       context: context,
@@ -157,7 +162,7 @@ class _RegisterState extends State<Register> {
     if (mounted) setState(() {});
   }
 
-  /* ---------- เปิดหน้าแผนที่ ---------- */
+  /* -------------------- เปิดหน้าแผนที่เพื่อปักหมุด -------------------- */
   Future<void> _openPinLocation() async {
     final LatLng? result = await Navigator.push(
       context,
@@ -168,79 +173,72 @@ class _RegisterState extends State<Register> {
     }
   }
 
-  /* ---------- อัปโหลดรูปขึ้น Storage แล้วคืน URL ---------- */
-  Future<String?> _uploadImageAndGetUrl({
-    required File file,
-    required String folder,
+  /* -------------------- เดา MIME จากนามสกุล -------------------- */
+  String _guessMimeByExt(String ext) {
+    final e = ext.toLowerCase();
+    if (e == 'jpg' || e == 'jpeg') return 'image/jpeg';
+    if (e == 'png') return 'image/png';
+    if (e == 'webp') return 'image/webp';
+    if (e == 'gif') return 'image/gif';
+    return 'application/octet-stream';
+  }
+
+  /* -------------------- อัปโหลดขึ้น Supabase แล้วคืน Public URL -------------------- */
+  Future<String?> _uploadToSupabaseAndGetUrl({
+    required File? file,
+    required String bucket,
+    required String path, // เช่น 'user_profile/<docId>.jpg'
   }) async {
-    // 1) ไฟล์ต้องมีอยู่จริง
-    if (!file.existsSync()) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('อัปโหลดรูปไม่สำเร็จ: ไฟล์ไม่พบในเครื่อง'),
-        ),
-      );
-      return null;
-    }
+    if (file == null) return null;
 
     try {
-      final storage = FirebaseStorage.instance;
+      final client = Supabase.instance.client;
+      final storage = client.storage;
 
-      // 2) สร้างชื่อไฟล์ (กันอักขระแปลกๆ)
-      String base = file.uri.pathSegments.last;
-      base = base.replaceAll(RegExp(r'[^A-Za-z0-9._-]'), '_');
-      final fileName = '${DateTime.now().millisecondsSinceEpoch}_$base';
+      // ทำ path ให้สะอาด (ไม่มี / นำหน้า)
+      final cleanPath = path.replaceFirst(RegExp(r'^/+'), '');
 
-      // 3) ref ต้องไม่มี "/" นำหน้า
-      final path = '$folder/$fileName';
-      final ref = storage.ref().child(path);
+      // เดา content-type จากนามสกุลไฟล์ใน path
+      final ext = cleanPath.split('.').last;
+      final mime = _guessMimeByExt(ext);
 
-      // 4) เดา contentType
-      final ext = file.path.split('.').last.toLowerCase();
-      final contentType = (ext == 'png')
-          ? 'image/png'
-          : (ext == 'webp')
-          ? 'image/webp'
-          : 'image/jpeg';
-
-      // 5) อัปโหลดและตรวจสถานะ
-      final task = await ref.putFile(
-        file,
-        SettableMetadata(contentType: contentType),
-      );
-
-      if (task.state != TaskState.success) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('อัปโหลดรูปไม่สำเร็จ: ${task.state.name}')),
-        );
-        return null;
+      // 1) พยายามแบบ binary ก่อน (เร็ว/เสถียรกว่าในหลายเคส)
+      try {
+        final bytes = await file.readAsBytes();
+        await storage
+            .from(bucket)
+            .uploadBinary(
+              cleanPath,
+              bytes,
+              fileOptions: FileOptions(
+                upsert: true,
+                cacheControl: '3600',
+                contentType: mime,
+              ),
+            );
+      } on StorageException {
+        // 2) ถ้า binary ล้มเหลว (เช่น Read failed บนอุปกรณ์บางรุ่น) ให้ fallback เป็น upload(File)
+        await storage
+            .from(bucket)
+            .upload(
+              cleanPath,
+              file,
+              fileOptions: FileOptions(
+                upsert: true,
+                cacheControl: '3600',
+                contentType: mime,
+              ),
+            );
       }
 
-      // 6) ลองขอ URL
-      final url = await ref.getDownloadURL();
-      print('✅ Upload success -> $path');
-      print('✅ URL -> $url');
-      return url;
-    } on FirebaseException catch (e) {
-      // รายงานพิเศษเมื่อเป็น object-not-found
-      if (e.code == 'object-not-found') {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text(
-              'อัปโหลดรูปไม่สำเร็จ: object-not-found (ไม่พบไฟล์ใน Storage ที่ path นี้)',
-            ),
-          ),
-        );
-      } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('อัปโหลดรูปไม่สำเร็จ: ${e.code}')),
-        );
-      }
-      return null;
+      // ได้ URL สาธารณะ (ต้องเปิด Public bucket + มี policy SELECT)
+      return storage.from(bucket).getPublicUrl(cleanPath);
     } catch (e) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('อัปโหลดรูปไม่สำเร็จ: $e')));
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('อัปโหลดรูปไม่สำเร็จ: $e')));
+      }
       return null;
     }
   }
@@ -354,7 +352,6 @@ class _RegisterState extends State<Register> {
                                     ),
                               ),
                             ),
-
                             SizedBox(
                               height: size.height * 0.72,
                               child: Scrollbar(
@@ -456,7 +453,6 @@ class _RegisterState extends State<Register> {
         validator: (v) => (v ?? '').trim().isEmpty ? 'กรอกชื่อ-นามสกุล' : null,
       ),
       const SizedBox(height: 14),
-
       _GroupBox(
         title: 'ที่อยู่ของคุณ',
         child: Column(
@@ -509,7 +505,6 @@ class _RegisterState extends State<Register> {
         ),
       ),
       const SizedBox(height: 16),
-
       _GroupBox(
         title: 'หมุดที่อยู่',
         trailing: const Icon(Icons.chevron_right),
@@ -582,12 +577,17 @@ class _RegisterState extends State<Register> {
         ),
       ),
       const SizedBox(height: 16),
-
       _CapsuleField(
         controller: passwordCtrl,
         label: 'รหัสผ่าน',
         hint: 'ป้อนรหัสผ่านของคุณ',
         obscureText: true,
+        validator: (v) {
+          final t = (v ?? '').trim();
+          if (t.isEmpty) return 'กรอกรหัสผ่าน';
+          if (t.length < 6) return 'อย่างน้อย 6 ตัวอักษร';
+          return null;
+        },
       ),
     ];
   }
@@ -615,7 +615,6 @@ class _RegisterState extends State<Register> {
         validator: (v) => (v ?? '').trim().isEmpty ? 'กรอกชื่อ-นามสกุล' : null,
       ),
       const SizedBox(height: 14),
-
       Text(
         'รูปยานพาหนะ',
         style: Theme.of(
@@ -630,15 +629,13 @@ class _RegisterState extends State<Register> {
         onTap: _chooseVehicleSource,
       ),
       const SizedBox(height: 14),
-
       _CapsuleField(
         controller: plateCtrl,
         label: 'ทะเบียนรถ',
-        hint: 'ป้อนทะเบียนรถ',
+        hint: 'ปักหมุดที่อยู่ของคุณบนแผนที่',
         validator: (v) => (v ?? '').trim().isEmpty ? 'กรอกทะเบียนรถ' : null,
       ),
       const SizedBox(height: 12),
-
       _DropdownCapsule<String>(
         label: 'ประเภทยานพาหนะ',
         hint: 'กดเพื่อเลือกประเภทยานพาหนะ',
@@ -648,12 +645,17 @@ class _RegisterState extends State<Register> {
         validator: (v) => v == null ? 'เลือกประเภทยานพาหนะ' : null,
       ),
       const SizedBox(height: 12),
-
       _CapsuleField(
         controller: riderPasswordCtrl,
         label: 'รหัสผ่าน',
         hint: 'ป้อนรหัสผ่านของคุณ',
         obscureText: true,
+        validator: (v) {
+          final t = (v ?? '').trim();
+          if (t.isEmpty) return 'กรอกรหัสผ่าน';
+          if (t.length < 6) return 'อย่างน้อย 6 ตัวอักษร';
+          return null;
+        },
       ),
     ];
   }
@@ -671,51 +673,70 @@ class _RegisterState extends State<Register> {
     try {
       final firestore = FirebaseFirestore.instance;
 
-      // อัปโหลดรูป (ถ้ามี) แล้วได้ URL
-      String? profileUrl;
-      String? vehicleUrl;
-
-      if (_profileSavedFile != null) {
-        profileUrl = await _uploadImageAndGetUrl(
-          file: _profileSavedFile!,
-          folder: 'user_profile',
-        );
-      }
-      if (_vehicleSavedFile != null) {
-        vehicleUrl = await _uploadImageAndGetUrl(
-          file: _vehicleSavedFile!,
-          folder: 'vehicle_images',
-        );
-      }
-
       if (role == RegisterRole.user) {
-        await firestore.collection('user').add({
+        // =============== USER ===============
+        final userDoc = firestore.collection('user').doc();
+
+        final File? profileFile =
+            _profileSavedFile ??
+            (_profileXFile != null ? File(_profileXFile!.path) : null);
+
+        final profileUrl = await _uploadToSupabaseAndGetUrl(
+          file: profileFile,
+          bucket: kBucketProfile,
+          path: 'user_profile/${userDoc.id}.jpg',
+        );
+
+        await userDoc.set({
           "name": nameCtrl.text.trim(),
           "phone": phoneCtrl.text.trim(),
           "password": passwordCtrl.text.trim(),
           "role": "user",
-          "picture": profileUrl ?? "", // 👈 เก็บ URL
+          "picture": profileUrl ?? "",
         });
 
         await firestore.collection('user_address').add({
+          "userid": userDoc.id,
           "address":
               "${addrNoCtrl.text}, ${subdistrictCtrl.text}, ${districtCtrl.text}, ${provinceCtrl.text}, ${zipcodeCtrl.text}",
           "lat": _addressPin?.latitude,
           "lng": _addressPin?.longitude,
         });
       } else {
-        await firestore.collection('user').add({
+        // =============== RIDER ===============
+        final riderDoc = firestore.collection('user').doc();
+
+        final File? profileFile =
+            _profileSavedFile ??
+            (_profileXFile != null ? File(_profileXFile!.path) : null);
+        final profileUrl = await _uploadToSupabaseAndGetUrl(
+          file: profileFile,
+          bucket: kBucketProfile,
+          path: 'user_profile/${riderDoc.id}.jpg',
+        );
+
+        await riderDoc.set({
           "name": riderNameCtrl.text.trim(),
           "phone": riderPhoneCtrl.text.trim(),
           "password": riderPasswordCtrl.text.trim(),
           "role": "rider",
-          "picture": profileUrl ?? "", // 👈 เก็บ URL
+          "picture": profileUrl ?? "",
         });
 
+        final File? vehicleFile =
+            _vehicleSavedFile ??
+            (_vehicleXFile != null ? File(_vehicleXFile!.path) : null);
+        final vehicleUrl = await _uploadToSupabaseAndGetUrl(
+          file: vehicleFile,
+          bucket: kBucketVehicle,
+          path: 'rider_vehicle/${riderDoc.id}.jpg',
+        );
+
         await firestore.collection('rider_car').add({
+          "userid": riderDoc.id,
           "plate_number": plateCtrl.text.trim(),
           "car_type": vehicleType,
-          "image_car": vehicleUrl ?? "", // 👈 เก็บ URL
+          "image_car": vehicleUrl ?? "",
         });
       }
 
@@ -736,7 +757,7 @@ class _RegisterState extends State<Register> {
   }
 }
 
-/* -------------------- Widgets ย่อย (เหมือนเดิม) -------------------- */
+/* -------------------- Widgets ย่อย -------------------- */
 
 class _SegmentButton extends StatelessWidget {
   const _SegmentButton({
@@ -744,7 +765,6 @@ class _SegmentButton extends StatelessWidget {
     required this.selected,
     required this.onTap,
   });
-
   final String text;
   final bool selected;
   final VoidCallback onTap;
@@ -773,7 +793,11 @@ class _SegmentButton extends StatelessWidget {
         alignment: Alignment.center,
         child: Text(
           text,
-          style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16),
+          style: const TextStyle(
+            fontWeight: FontWeight.w800,
+            color: Colors.black87,
+            fontSize: 16,
+          ),
         ),
       ),
     );
@@ -782,7 +806,6 @@ class _SegmentButton extends StatelessWidget {
 
 class _ProfileAvatar extends StatelessWidget {
   const _ProfileAvatar({required this.label, this.onTap, this.imageFile});
-
   final String label;
   final VoidCallback? onTap;
   final File? imageFile;
@@ -826,7 +849,6 @@ class _GroupBox extends StatelessWidget {
     this.trailing,
     this.onHeaderTap,
   });
-
   final String title;
   final Widget child;
   final Widget? trailing;
@@ -1028,7 +1050,6 @@ class _RedButton extends StatelessWidget {
     required this.onPressed,
     this.background = const Color(0xFFE96356),
   });
-
   final String text;
   final VoidCallback onPressed;
   final Color background;
@@ -1056,10 +1077,9 @@ class _RedButton extends StatelessWidget {
   }
 }
 
-/* -------- ยานพาหนะ: การ์ดรูป + โลโก้รถ -------- */
+/* -------- ยานพาหนะ: การ์ดรูป -------- */
 class _VehicleImageCard extends StatelessWidget {
   const _VehicleImageCard({this.imageFile, this.onTap});
-
   final File? imageFile;
   final VoidCallback? onTap;
 
