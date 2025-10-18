@@ -1,6 +1,7 @@
-// pin_location_page.dart
 import 'dart:async';
-import 'dart:developer';
+import 'dart:convert';
+import 'package:http/http.dart' as http;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:geolocator/geolocator.dart';
@@ -17,7 +18,9 @@ class PinLocationPage extends StatefulWidget {
 
 class _PinLocationPageState extends State<PinLocationPage> {
   final MapController _map = MapController();
+
   final TextEditingController _searchCtrl = TextEditingController();
+  Timer? _debounce;
 
   bool _isMapReady = false;
 
@@ -31,19 +34,130 @@ class _PinLocationPageState extends State<PinLocationPage> {
   static const _headerH = 56.0;
   static const _brandRed = Color(0xFFE96356);
 
+  // ---------- Suggestions state -----------
+  bool _isSearching = false;
+  List<_GeoSuggestion> _suggestions = [];
+
   @override
   void initState() {
     super.initState();
-    // พอเข้าหน้าให้หาพิกัดจริงก่อน แล้วค่อยสร้างแผนที่ (จะไม่เด้งไปจุดอื่นก่อน)
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _goToMyLocation(autoSetPin: true, moveCamera: false);
     });
+
+    _searchCtrl.addListener(_onSearchChanged);
   }
 
   @override
   void dispose() {
+    _searchCtrl.removeListener(_onSearchChanged);
+    _debounce?.cancel();
     _searchCtrl.dispose();
     super.dispose();
+  }
+
+  /* ======================== Search ======================== */
+
+  void _onSearchChanged() {
+    // ถ้าดูเหมือนพิมพ์รูปแบบ lat,lng ให้ไม่ยิง geocoding
+    if (_looksLikeLatLng(_searchCtrl.text)) return;
+
+    // debounce เพื่อไม่ยิง API ทุกตัวอักษร
+    _debounce?.cancel();
+    _debounce = Timer(const Duration(milliseconds: 350), () {
+      _runGeocoding(_searchCtrl.text.trim());
+    });
+  }
+
+  bool _looksLikeLatLng(String raw) {
+    final t = raw.trim();
+    if (t.isEmpty) return false;
+    final norm = t.replaceAll(',', ' ').replaceAll(RegExp(r'\s+'), ' ');
+    final parts = norm.split(' ');
+    if (parts.length != 2) return false;
+    final lat = double.tryParse(parts[0]);
+    final lng = double.tryParse(parts[1]);
+    return lat != null && lng != null;
+  }
+
+  Future<void> _runGeocoding(String q) async {
+    if (q.isEmpty) {
+      setState(() {
+        _isSearching = false;
+        _suggestions = [];
+      });
+      return;
+    }
+
+    setState(() => _isSearching = true);
+
+    try {
+      // ใช้ Nominatim (OpenStreetMap)
+      // จำกัดประเทศไทย ถ้าต้องการลบตัวกรอง countrycodes=th ออกได้
+      final uri = Uri.parse(
+        'https://nominatim.openstreetmap.org/search'
+        '?q=${Uri.encodeQueryComponent(q)}'
+        '&format=json&addressdetails=1&limit=10&countrycodes=th',
+      );
+
+      final res = await http.get(
+        uri,
+        headers: {
+          // ใส่ชื่อแอป/อีเมลของคุณตามข้อกำหนดของ Nominatim
+          'User-Agent': 'your.app.name/1.0 (contact@example.com)',
+        },
+      );
+
+      if (res.statusCode == 200) {
+        final List data = json.decode(res.body) as List;
+        final items = data
+            .map((e) {
+              final lat = double.tryParse(e['lat']?.toString() ?? '');
+              final lon = double.tryParse(e['lon']?.toString() ?? '');
+              final name = (e['display_name'] ?? '') as String;
+              return (lat != null && lon != null)
+                  ? _GeoSuggestion(name: name, point: LatLng(lat, lon))
+                  : null;
+            })
+            .whereType<_GeoSuggestion>()
+            .toList();
+
+        if (mounted) {
+          setState(() {
+            _suggestions = items;
+            _isSearching = false;
+          });
+        }
+      } else {
+        if (mounted) {
+          setState(() {
+            _suggestions = [];
+            _isSearching = false;
+          });
+        }
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _suggestions = [];
+          _isSearching = false;
+        });
+      }
+    }
+  }
+
+  void _pickSuggestion(_GeoSuggestion s) {
+    FocusScope.of(context).unfocus();
+    _searchCtrl.text = s.name;
+    setState(() {
+      _suggestions = [];
+      _isSearching = false;
+      _pin = s.point;
+      _mapCenter ??= s.point;
+    });
+    if (_isMapReady) {
+      _map.move(s.point, 17);
+    }
   }
 
   /* ======================== Utilities ======================== */
@@ -63,15 +177,11 @@ class _PinLocationPageState extends State<PinLocationPage> {
   }
 
   Future<void> _goToEnteredLatLng() async {
+    // หากเป็นพิกัด lat,lng ให้ไปตามนั้น
     final p = _parseLatLng(_searchCtrl.text);
     if (p == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-            'รูปแบบไม่ถูกต้อง ใส่: ละติจูด, ลองจิจูด เช่น 16.24637, 103.25182',
-          ),
-        ),
-      );
+      // ถ้าไม่ใช่ lat,lng ให้ลอง geocoding ทันที (กันกรณีกดลูกศร)
+      await _runGeocoding(_searchCtrl.text.trim());
       return;
     }
     if (_isMapReady) _map.move(p, 17);
@@ -110,7 +220,7 @@ class _PinLocationPageState extends State<PinLocationPage> {
 
     setState(() {
       _myLocation = here;
-      _mapCenter ??= here; // ใช้เป็นศูนย์กลางตอนสร้างแผนที่ครั้งแรก
+      _mapCenter ??= here;
       if (autoSetPin) _pin = here;
     });
 
@@ -123,7 +233,7 @@ class _PinLocationPageState extends State<PinLocationPage> {
     if (_pin == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('แตะแผนที่เพื่อวางหมุด หรือกรอกพิกัดให้ถูกต้อง'),
+          content: Text('แตะแผนที่เพื่อวางหมุด หรือค้นหาพิกัด/สถานที่'),
         ),
       );
       return;
@@ -160,9 +270,8 @@ class _PinLocationPageState extends State<PinLocationPage> {
                         subdomains: const ['a', 'b', 'c'],
                         userAgentPackageName: 'com.example.app',
                       ),
-                      // MarkerLayer เดียว: จุดดำก่อน -> หมุดแดงทับ (ให้หมุดอยู่บน)
                       MarkerLayer(
-                        rotate: false, // << หมุด/จุดจะตั้งตรงขนานกับจอตลอด
+                        rotate: false,
                         markers: [
                           if (_myLocation != null) ...[
                             Marker(
@@ -207,10 +316,7 @@ class _PinLocationPageState extends State<PinLocationPage> {
                               width: 60,
                               height: 60,
                               child: Transform.translate(
-                                offset: const Offset(
-                                  0,
-                                  -12,
-                                ), // ยกหัวหมุดให้ปลายชี้พิกัดจริง
+                                offset: const Offset(0, -12),
                                 child: const Icon(
                                   Icons.location_on,
                                   size: 48,
@@ -278,7 +384,7 @@ class _PinLocationPageState extends State<PinLocationPage> {
             ),
           ),
 
-          // ===== Search box (lat,lng) =====
+          // ===== Search box (ชื่อสถานที่หรือ lat,lng) =====
           Positioned(
             top: searchTop,
             left: 12,
@@ -288,15 +394,13 @@ class _PinLocationPageState extends State<PinLocationPage> {
               borderRadius: BorderRadius.circular(28),
               child: TextField(
                 controller: _searchCtrl,
-                keyboardType: const TextInputType.numberWithOptions(
-                  decimal: true,
-                  signed: true,
-                ),
+                textInputAction: TextInputAction.search,
                 decoration: InputDecoration(
-                  hintText: 'เช่น 16.24637, 103.25182',
+                  hintText:
+                      'ค้นหาสถานที่/หมู่บ้าน/ตำบล/อำเภอ/จังหวัด หรือพิมพ์ 16.24637, 103.25182',
                   prefixIcon: const Icon(Icons.search),
                   suffixIcon: IconButton(
-                    tooltip: 'ไปยังพิกัด',
+                    tooltip: 'ค้นหา/ไปยังพิกัด',
                     onPressed: _goToEnteredLatLng,
                     icon: const Icon(Icons.arrow_forward),
                   ),
@@ -327,10 +431,55 @@ class _PinLocationPageState extends State<PinLocationPage> {
             ),
           ),
 
+          // ===== Suggestions overlay =====
+          if (_isSearching || _suggestions.isNotEmpty)
+            Positioned(
+              top: searchTop + 56,
+              left: 16,
+              right: 16,
+              child: Material(
+                elevation: 4,
+                borderRadius: BorderRadius.circular(12),
+                color: Colors.white,
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxHeight: 260),
+                  child: _isSearching
+                      ? const SizedBox(
+                          height: 80,
+                          child: Center(
+                            child: Padding(
+                              padding: EdgeInsets.all(12.0),
+                              child: CircularProgressIndicator(),
+                            ),
+                          ),
+                        )
+                      : ListView.separated(
+                          padding: EdgeInsets.zero,
+                          itemCount: _suggestions.length,
+                          separatorBuilder: (_, __) =>
+                              const Divider(height: 1, color: Colors.black12),
+                          itemBuilder: (context, i) {
+                            final s = _suggestions[i];
+                            return ListTile(
+                              dense: true,
+                              leading: const Icon(Icons.place_outlined),
+                              title: Text(
+                                s.name,
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                              onTap: () => _pickSuggestion(s),
+                            );
+                          },
+                        ),
+                ),
+              ),
+            ),
+
           // ===== Confirm button (ล่างขวา) =====
           Positioned(
             right: 16,
-            bottom: 24, // << อยู่ล่างสุด
+            bottom: 24,
             child: SafeArea(
               top: false,
               child: ElevatedButton(
@@ -359,10 +508,10 @@ class _PinLocationPageState extends State<PinLocationPage> {
             ),
           ),
 
-          // ===== GPS target (วางเหนือปุ่มยืนยันเล็กน้อย) =====
+          // ===== GPS target =====
           Positioned(
             right: 16,
-            bottom: 24 + 60, // << ยกขึ้นเหนือปุ่มยืนยัน ~60px
+            bottom: 24 + 60,
             child: Material(
               color: _brandRed,
               shape: const CircleBorder(
@@ -383,4 +532,12 @@ class _PinLocationPageState extends State<PinLocationPage> {
       ),
     );
   }
+}
+
+/* ======================== model ======================== */
+
+class _GeoSuggestion {
+  final String name;
+  final LatLng point;
+  _GeoSuggestion({required this.name, required this.point});
 }

@@ -5,6 +5,8 @@ import 'package:flutter_application_4/page/login.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:flutter_application_4/widgets/user_footer.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+// เพิ่มบรรทัดนี้ด้านบน
+import 'package:flutter_application_4/page/address_book.dart';
 
 class ProfilePage extends StatefulWidget {
   final String userId; // ✅ รับ userId จาก Login/FooterNavBar
@@ -21,9 +23,10 @@ class _ProfilePageState extends State<ProfilePage> {
   XFile? _avatar;
 
   void _openAddressBook() {
-    ScaffoldMessenger.of(
+    Navigator.push(
       context,
-    ).showSnackBar(const SnackBar(content: Text('ไปสมุดที่อยู่ (TODO)')));
+      MaterialPageRoute(builder: (_) => AddressBookPage(userId: widget.userId)),
+    );
   }
 
   void _logout() {
