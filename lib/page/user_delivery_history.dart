@@ -2,6 +2,7 @@ import 'dart:ui';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_application_4/page/user_delivery_detail.dart';
 import 'package:flutter_application_4/utils/delivery_lookup.dart';
 import 'package:flutter_application_4/utils/delivery_models.dart';
 import 'package:flutter_application_4/widgets/delivery_stream_list.dart';
@@ -52,105 +53,14 @@ class _UserDeliveryHistoryPageState extends State<UserDeliveryHistoryPage>
       ? 'ค้นหาประวัติด้วยเบอร์ผู้รับ'
       : 'ค้นหาประวัติด้วยเบอร์ผู้ส่ง';
 
-  void _openDetail(DeliveryRecord record, bool isSenderList) {
-    final otherUserFuture = _lookup.getUser(
-      isSenderList ? record.receiverId : record.senderId,
-    );
-    final senderAddressFuture = _lookup.getAddress(record.senderAddressId);
-    final receiverAddressFuture = _lookup.getAddress(record.receiverAddressId);
-
-    showModalBottomSheet(
-      context: context,
-      showDragHandle: true,
-      backgroundColor: Colors.white,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+  void _openDetail(DeliveryRecord record) {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => UserDeliveryDetailPage(
+          record: record,
+          lookup: _lookup,
+        ),
       ),
-      builder: (context) {
-        return FutureBuilder(
-          future: Future.wait([
-            otherUserFuture,
-            senderAddressFuture,
-            receiverAddressFuture,
-          ]),
-          builder: (context, snapshot) {
-            if (snapshot.connectionState == ConnectionState.waiting) {
-              return const SizedBox(
-                height: 200,
-                child: Center(child: CircularProgressIndicator()),
-              );
-            }
-
-            final otherUser = snapshot.data?[0] as UserSummary?;
-            final senderAddr = snapshot.data?[1] as AddressSummary?;
-            final receiverAddr = snapshot.data?[2] as AddressSummary?;
-
-            return Padding(
-              padding: const EdgeInsets.fromLTRB(18, 12, 18, 24),
-              child: SingleChildScrollView(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'ประวัติคำสั่ง #${record.id}',
-                      style: const TextStyle(
-                        fontSize: 20,
-                        fontWeight: FontWeight.w900,
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    _HistoryRow(label: 'สถานะ', value: record.status),
-                    const SizedBox(height: 6),
-                    _HistoryRow(
-                      label: isSenderList ? 'ข้อมูลผู้รับ' : 'ข้อมูลผู้ส่ง',
-                      value:
-                          '${otherUser?.name ?? '-'} | ${otherUser?.phone ?? (isSenderList ? record.receiverPhone ?? '-' : record.senderPhone ?? '-')}',
-                    ),
-                    const SizedBox(height: 6),
-                    _HistoryRow(label: 'จำนวน', value: '${record.amount} ชิ้น'),
-                    if ((record.detail ?? '').isNotEmpty) ...[
-                      const SizedBox(height: 6),
-                      _HistoryRow(label: 'รายละเอียด', value: record.detail!),
-                    ],
-                    const SizedBox(height: 12),
-                    const Text(
-                      'ที่อยู่ผู้ส่ง',
-                      style: TextStyle(
-                        fontWeight: FontWeight.w700,
-                        fontSize: 16,
-                      ),
-                    ),
-                    Text(senderAddr?.address ?? '-'),
-                    if (senderAddr?.lat != null && senderAddr?.lng != null)
-                      Text('(${senderAddr!.lat}, ${senderAddr.lng})'),
-                    const SizedBox(height: 10),
-                    const Text(
-                      'ที่อยู่ผู้รับ',
-                      style: TextStyle(
-                        fontWeight: FontWeight.w700,
-                        fontSize: 16,
-                      ),
-                    ),
-                    Text(receiverAddr?.address ?? '-'),
-                    if (receiverAddr?.lat != null && receiverAddr?.lng != null)
-                      Text('(${receiverAddr!.lat}, ${receiverAddr.lng})'),
-                    if (record.updatedAt != null) ...[
-                      const SizedBox(height: 12),
-                      Text(
-                        'อัปเดตล่าสุด: ${record.updatedAt}',
-                        style: const TextStyle(
-                          fontSize: 12,
-                          color: Colors.grey,
-                        ),
-                      ),
-                    ],
-                  ],
-                ),
-              ),
-            );
-          },
-        );
-      },
     );
   }
 
@@ -282,8 +192,7 @@ class _UserDeliveryHistoryPageState extends State<UserDeliveryHistoryPage>
                                       lookup: _lookup,
                                       searchText: _searchCtrl.text,
                                       isSender: true,
-                                      onTap: (record) =>
-                                          _openDetail(record, true),
+                                      onTap: _openDetail,
                                       filter: (record) => record.isCompleted,
                                       emptyMessage:
                                           'ยังไม่มีประวัติการจัดส่งของคุณ',
@@ -293,8 +202,7 @@ class _UserDeliveryHistoryPageState extends State<UserDeliveryHistoryPage>
                                       lookup: _lookup,
                                       searchText: _searchCtrl.text,
                                       isSender: false,
-                                      onTap: (record) =>
-                                          _openDetail(record, false),
+                                      onTap: _openDetail,
                                       filter: (record) => record.isCompleted,
                                       emptyMessage:
                                           'ยังไม่มีประวัติการจัดส่งที่ส่งถึงคุณ',
@@ -319,20 +227,3 @@ class _UserDeliveryHistoryPageState extends State<UserDeliveryHistoryPage>
   }
 }
 
-class _HistoryRow extends StatelessWidget {
-  const _HistoryRow({required this.label, required this.value});
-
-  final String label;
-  final String value;
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text('$label : ', style: const TextStyle(fontWeight: FontWeight.w700)),
-        Expanded(child: Text(value, style: const TextStyle(height: 1.35))),
-      ],
-    );
-  }
-}
