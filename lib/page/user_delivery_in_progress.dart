@@ -87,10 +87,7 @@ class _UserDeliveryInProgressPageState extends State<UserDeliveryInProgressPage>
                   ),
                 ),
                 const SizedBox(height: 12),
-                _DetailRow(
-                  label: 'สถานะ',
-                  value: record.status,
-                ),
+                _DetailRow(label: 'สถานะ', value: record.status),
                 const SizedBox(height: 6),
                 _DetailRow(
                   label: isSenderList ? 'ข้อมูลผู้รับ' : 'ข้อมูลผู้ส่ง',
@@ -98,10 +95,7 @@ class _UserDeliveryInProgressPageState extends State<UserDeliveryInProgressPage>
                       '${otherUser?.name ?? '-'} | ${otherUser?.phone ?? (isSenderList ? record.receiverPhone ?? '-' : record.senderPhone ?? '-')}',
                 ),
                 const SizedBox(height: 6),
-                _DetailRow(
-                  label: 'จำนวน',
-                  value: '${record.amount} ชิ้น',
-                ),
+                _DetailRow(label: 'จำนวน', value: '${record.amount} ชิ้น'),
                 const SizedBox(height: 6),
                 if ((record.detail ?? '').isNotEmpty)
                   _DetailRow(label: 'รายละเอียด', value: record.detail!),
@@ -141,7 +135,7 @@ class _UserDeliveryInProgressPageState extends State<UserDeliveryInProgressPage>
                                     child: CircularProgressIndicator(
                                       value: progress.expectedTotalBytes != null
                                           ? progress.cumulativeBytesLoaded /
-                                              progress.expectedTotalBytes!
+                                                progress.expectedTotalBytes!
                                           : null,
                                     ),
                                   ),
@@ -149,7 +143,9 @@ class _UserDeliveryInProgressPageState extends State<UserDeliveryInProgressPage>
                               },
                               errorBuilder: (_, __, ___) => const SizedBox(
                                 height: 220,
-                                child: Center(child: Text('ไม่สามารถโหลดรูปได้')),
+                                child: Center(
+                                  child: Text('ไม่สามารถโหลดรูปได้'),
+                                ),
                               ),
                             ),
                           ),
@@ -241,12 +237,20 @@ class _UserDeliveryInProgressPageState extends State<UserDeliveryInProgressPage>
                           decoration: BoxDecoration(
                             color: Colors.white.withOpacity(0.9),
                             borderRadius: BorderRadius.circular(24),
-                            border: Border.all(color: Colors.black54, width: 1.5),
+                            border: Border.all(
+                              color: Colors.black54,
+                              width: 1.5,
+                            ),
                           ),
                           child: Column(
                             children: [
                               Padding(
-                                padding: const EdgeInsets.fromLTRB(16, 18, 16, 10),
+                                padding: const EdgeInsets.fromLTRB(
+                                  16,
+                                  18,
+                                  16,
+                                  10,
+                                ),
                                 child: TextField(
                                   controller: _searchCtrl,
                                   onChanged: (_) => setState(() {}),
@@ -319,8 +323,7 @@ class _UserDeliveryInProgressPageState extends State<UserDeliveryInProgressPage>
           ),
         ],
       ),
-      bottomNavigationBar:
-          FooterNavBar(currentIndex: 1, userId: widget.userId),
+      bottomNavigationBar: FooterNavBar(currentIndex: 1, userId: widget.userId),
     );
   }
 }
@@ -336,16 +339,8 @@ class _DetailRow extends StatelessWidget {
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          '$label : ',
-          style: const TextStyle(fontWeight: FontWeight.w700),
-        ),
-        Expanded(
-          child: Text(
-            value,
-            style: const TextStyle(height: 1.35),
-          ),
-        ),
+        Text('$label : ', style: const TextStyle(fontWeight: FontWeight.w700)),
+        Expanded(child: Text(value, style: const TextStyle(height: 1.35))),
       ],
     );
   }

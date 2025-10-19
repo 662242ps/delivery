@@ -3,16 +3,12 @@ class DeliveryStatus {
   DeliveryStatus._();
 
   static const waitingForRider = 'รอไรเดอร์มารับสินค้า';
-  static const riderAccepted = 'ไรเดอร์รับงาน (กำลังเดินทางมารับสินค้า)';
+  static const riderAccepted = 'ไรเดอร์รับงาน';
   static const riderPickedUp = 'ไรเดอร์รับสินค้าแล้วและกำลังเดินทางไปส่ง';
   static const delivered = 'ไรเดอร์นำส่งสินค้าแล้ว';
 
   /// สถานะที่ถือว่ายังอยู่ระหว่างดำเนินการ (ใช้ในหน้า "กำลังจัดส่ง")
-  static const active = <String>{
-    waitingForRider,
-    riderAccepted,
-    riderPickedUp,
-  };
+  static const active = <String>{waitingForRider, riderAccepted, riderPickedUp};
 
   /// สถานะที่เกี่ยวข้องกับการติดตามบนแผนที่ (ระหว่างรอหรือกำลังจัดส่ง)
   static const mapRelated = <String>{
@@ -22,9 +18,7 @@ class DeliveryStatus {
   };
 
   /// สถานะที่ถือว่าส่งสำเร็จเรียบร้อยแล้ว (ใช้ในหน้า "ประวัติ")
-  static const completed = <String>{
-    delivered,
-  };
+  static const completed = <String>{delivered};
 
   /// Alias จากข้อมูลเก่า/ชื่อที่สั้นลง เพื่อให้รองรับฐานข้อมูลเดิม
   static const Map<String, String> _aliases = {

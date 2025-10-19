@@ -35,8 +35,7 @@ class _SendProductPageState extends State<SendProductPage> {
   final _detailCtrl = TextEditingController();
 
   // แสดงผลใน UI (ข้อความเท่านั้น ไม่บันทึกลง Firestore)
-  String? _senderAddressText =
-      'ชื่อ xxxxx xxxxx | เบอร์ xxxxxxxxxx\nบ้านเลขที่ xx, ซอย xxx, ถนน xxxx, ตำบล xxxxx,\nอำเภอ xxxxx, จังหวัด xxxx, รหัสไปรษณีย์ xxxxx';
+  String? _senderAddressText = 'กรุณาเลือกที่อยู่ของคุณ';
   String? _receiverAddressText;
 
   // ค่าที่ต้องบันทึกจริง

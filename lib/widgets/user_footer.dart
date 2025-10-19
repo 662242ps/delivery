@@ -40,12 +40,12 @@ class FooterNavBar extends StatelessWidget {
 
   /// ✅ ค่าเริ่มต้นของเพจปลายทาง (ทุกหน้าใช้ userId)
   static List<WidgetBuilder> _defaultPageBuilders(String userId) => [
-        (ctx) => SendProductPage(userId: userId),
-        (ctx) => UserDeliveryInProgressPage(userId: userId),
-        (ctx) => UserDeliveryMapPage(userId: userId),
-        (ctx) => UserDeliveryHistoryPage(userId: userId),
-        (ctx) => ProfilePage(userId: userId),
-      ];
+    (ctx) => SendProductPage(userId: userId),
+    (ctx) => UserDeliveryInProgressPage(userId: userId),
+    (ctx) => UserDeliveryMapPage(userId: userId),
+    (ctx) => UserDeliveryHistoryPage(userId: userId),
+    (ctx) => ProfilePage(userId: userId),
+  ];
 
   final List<WidgetBuilder> pageBuilders;
   final bool usePushReplacement;
@@ -56,9 +56,18 @@ class FooterNavBar extends StatelessWidget {
   }
 
   void _handleTap(BuildContext context, int i) {
+    // 🔒 กันกดซ้ำแท็บเดิม ไม่ต้องนำทาง
+    if (i == currentIndex) {
+      onTap?.call(i);
+      return;
+    }
+
     onTap?.call(i);
+
     if (i >= 0 && i < pageBuilders.length) {
-      final route = MaterialPageRoute(builder: pageBuilders[i]);
+      // 🛡️ ใช้ route แบบ "ไม่อนิเมชัน" เฉพาะสลับแท็บ เพื่อกันแฟลช/กะพิบ
+      final route = _NoAnimationPageRoute(builder: pageBuilders[i]);
+
       if (usePushReplacement) {
         Navigator.of(context).pushReplacement(route);
       } else {
@@ -69,8 +78,9 @@ class FooterNavBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final safeIndex =
-        (currentIndex < 0 || currentIndex >= items.length) ? 0 : currentIndex;
+    final safeIndex = (currentIndex < 0 || currentIndex >= items.length)
+        ? 0
+        : currentIndex;
 
     return SafeArea(
       top: false,
@@ -136,4 +146,17 @@ class FooterNavBar extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Route ไม่ใส่อนิเมชัน — ใช้เฉพาะเวลาสลับแท็บผ่าน Footer
+class _NoAnimationPageRoute<T> extends PageRouteBuilder<T> {
+  _NoAnimationPageRoute({required WidgetBuilder builder})
+    : super(
+        pageBuilder: (context, animation, secondaryAnimation) =>
+            builder(context),
+        transitionDuration: Duration.zero,
+        reverseTransitionDuration: Duration.zero,
+        opaque: true,
+        barrierDismissible: false,
+      );
 }

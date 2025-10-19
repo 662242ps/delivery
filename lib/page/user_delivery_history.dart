@@ -107,10 +107,7 @@ class _UserDeliveryHistoryPageState extends State<UserDeliveryHistoryPage>
                           '${otherUser?.name ?? '-'} | ${otherUser?.phone ?? (isSenderList ? record.receiverPhone ?? '-' : record.senderPhone ?? '-')}',
                     ),
                     const SizedBox(height: 6),
-                    _HistoryRow(
-                      label: 'จำนวน',
-                      value: '${record.amount} ชิ้น',
-                    ),
+                    _HistoryRow(label: 'จำนวน', value: '${record.amount} ชิ้น'),
                     if ((record.detail ?? '').isNotEmpty) ...[
                       const SizedBox(height: 6),
                       _HistoryRow(label: 'รายละเอียด', value: record.detail!),
@@ -118,8 +115,10 @@ class _UserDeliveryHistoryPageState extends State<UserDeliveryHistoryPage>
                     const SizedBox(height: 12),
                     const Text(
                       'ที่อยู่ผู้ส่ง',
-                      style:
-                          TextStyle(fontWeight: FontWeight.w700, fontSize: 16),
+                      style: TextStyle(
+                        fontWeight: FontWeight.w700,
+                        fontSize: 16,
+                      ),
                     ),
                     Text(senderAddr?.address ?? '-'),
                     if (senderAddr?.lat != null && senderAddr?.lng != null)
@@ -127,8 +126,10 @@ class _UserDeliveryHistoryPageState extends State<UserDeliveryHistoryPage>
                     const SizedBox(height: 10),
                     const Text(
                       'ที่อยู่ผู้รับ',
-                      style:
-                          TextStyle(fontWeight: FontWeight.w700, fontSize: 16),
+                      style: TextStyle(
+                        fontWeight: FontWeight.w700,
+                        fontSize: 16,
+                      ),
                     ),
                     Text(receiverAddr?.address ?? '-'),
                     if (receiverAddr?.lat != null && receiverAddr?.lng != null)
@@ -137,7 +138,10 @@ class _UserDeliveryHistoryPageState extends State<UserDeliveryHistoryPage>
                       const SizedBox(height: 12),
                       Text(
                         'อัปเดตล่าสุด: ${record.updatedAt}',
-                        style: const TextStyle(fontSize: 12, color: Colors.grey),
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: Colors.grey,
+                        ),
                       ),
                     ],
                   ],
@@ -224,12 +228,20 @@ class _UserDeliveryHistoryPageState extends State<UserDeliveryHistoryPage>
                           decoration: BoxDecoration(
                             color: Colors.white.withOpacity(0.9),
                             borderRadius: BorderRadius.circular(24),
-                            border: Border.all(color: Colors.black54, width: 1.5),
+                            border: Border.all(
+                              color: Colors.black54,
+                              width: 1.5,
+                            ),
                           ),
                           child: Column(
                             children: [
                               Padding(
-                                padding: const EdgeInsets.fromLTRB(16, 18, 16, 10),
+                                padding: const EdgeInsets.fromLTRB(
+                                  16,
+                                  18,
+                                  16,
+                                  10,
+                                ),
                                 child: TextField(
                                   controller: _searchCtrl,
                                   onChanged: (_) => setState(() {}),
@@ -302,8 +314,7 @@ class _UserDeliveryHistoryPageState extends State<UserDeliveryHistoryPage>
           ),
         ],
       ),
-      bottomNavigationBar:
-          FooterNavBar(currentIndex: 3, userId: widget.userId),
+      bottomNavigationBar: FooterNavBar(currentIndex: 3, userId: widget.userId),
     );
   }
 }
@@ -319,16 +330,8 @@ class _HistoryRow extends StatelessWidget {
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          '$label : ',
-          style: const TextStyle(fontWeight: FontWeight.w700),
-        ),
-        Expanded(
-          child: Text(
-            value,
-            style: const TextStyle(height: 1.35),
-          ),
-        ),
+        Text('$label : ', style: const TextStyle(fontWeight: FontWeight.w700)),
+        Expanded(child: Text(value, style: const TextStyle(height: 1.35))),
       ],
     );
   }
