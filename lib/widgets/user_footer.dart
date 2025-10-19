@@ -2,6 +2,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_application_4/page/profile.dart';
 import 'package:flutter_application_4/page/send_product.dart';
+import 'package:flutter_application_4/page/user_delivery_history.dart';
+import 'package:flutter_application_4/page/user_delivery_in_progress.dart';
+import 'package:flutter_application_4/page/user_delivery_map.dart';
 
 const Color kBrandRed = Color(0xFFE96356);
 
@@ -38,9 +41,9 @@ class FooterNavBar extends StatelessWidget {
   /// ✅ ค่าเริ่มต้นของเพจปลายทาง (ทุกหน้าใช้ userId)
   static List<WidgetBuilder> _defaultPageBuilders(String userId) => [
         (ctx) => SendProductPage(userId: userId),
-        (ctx) => SendProductPage(userId: userId),
-        (ctx) => SendProductPage(userId: userId),
-        (ctx) => SendProductPage(userId: userId),
+        (ctx) => UserDeliveryInProgressPage(userId: userId),
+        (ctx) => UserDeliveryMapPage(userId: userId),
+        (ctx) => UserDeliveryHistoryPage(userId: userId),
         (ctx) => ProfilePage(userId: userId),
       ];
 
