@@ -15,6 +15,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:flutter_application_4/widgets/user_footer.dart';
 import 'package:flutter_application_4/page/select_receiver_address.dart';
 import 'package:flutter_application_4/page/select_sender_address.dart';
+import 'package:flutter_application_4/utils/delivery_status.dart';
 
 const kBucketDeliveries = 'avatars'; // ต้องมีใน Supabase และเปิด public
 
@@ -34,8 +35,7 @@ class _SendProductPageState extends State<SendProductPage> {
   final _detailCtrl = TextEditingController();
 
   // แสดงผลใน UI (ข้อความเท่านั้น ไม่บันทึกลง Firestore)
-  String? _senderAddressText =
-      'ชื่อ xxxxx xxxxx | เบอร์ xxxxxxxxxx\nบ้านเลขที่ xx, ซอย xxx, ถนน xxxx, ตำบล xxxxx,\nอำเภอ xxxxx, จังหวัด xxxx, รหัสไปรษณีย์ xxxxx';
+  String? _senderAddressText = 'กรุณาเลือกที่อยู่ของคุณ';
   String? _receiverAddressText;
 
   // ค่าที่ต้องบันทึกจริง
@@ -188,12 +188,15 @@ class _SendProductPageState extends State<SendProductPage> {
       'deliveryid': deliveryId,
       'userid_sender': widget.userId,
       'userid_receiver': _rcvUserId,
+      'sender_name': _sndName,
+      'phone_sender': _sndPhone,
       'phone_receiver': _rcvPhone,
+      'receiver_name': _rcvName,
       'addressid_sender': _sndAddressId,
       'addressid_receiver': _rcvAddressId,
       'picture_status1': pictureUrl,
       'riderid': null,
-      'status': 'รอไรเดอร์',
+      'status': DeliveryStatus.waitingForRider,
       'amount': int.tryParse(_amountCtrl.text.trim()) ?? 1,
       'detail': _detailCtrl.text.trim(),
       'created_at': FieldValue.serverTimestamp(),

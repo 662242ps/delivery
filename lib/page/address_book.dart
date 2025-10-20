@@ -269,8 +269,11 @@ class _AddressBookPageState extends State<AddressBookPage> {
                                                     ?.toDouble(),
                                                 lng: (a['lng'] as num?)
                                                     ?.toDouble(),
-                                                addressDocId: addrDocs[i]
-                                                    .id, // ✅ ส่ง id ไปเพื่อบันทึกได้
+                                                addressDocId: addrDocs[i].id,
+                          
+                                                fromAddressBook:
+                                                    true, // ✅ จะมีปุ่มแก้ไข
+
                                               ),
                                             ),
                                           );

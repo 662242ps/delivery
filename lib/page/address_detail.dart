@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 
-// หน้าเลือกตำแหน่งที่คุณมีอยู่แล้ว
+// หน้าเลือกตำแหน่งที่มีอยู่แล้ว
 import 'package:flutter_application_4/page/pin_location.dart';
 
 class AddressDetailPage extends StatefulWidget {
@@ -15,6 +15,7 @@ class AddressDetailPage extends StatefulWidget {
     this.lat,
     this.lng,
     this.addressDocId,
+    this.fromAddressBook = false, // true = แก้ไขได้
   });
 
   final String name;
@@ -23,6 +24,7 @@ class AddressDetailPage extends StatefulWidget {
   final double? lat;
   final double? lng;
   final String? addressDocId;
+  final bool fromAddressBook;
 
   @override
   State<AddressDetailPage> createState() => _AddressDetailPageState();
@@ -40,8 +42,10 @@ class _AddressDetailPageState extends State<AddressDetailPage> {
   late final TextEditingController _nameCtrl;
   late final TextEditingController _phoneCtrl;
 
-  // ---- พิกัด (ใช้ตัวแปรชื่อเดียวกับตัวอย่าง) ----
+  // ---- พิกัด ----
   LatLng? _addressPin;
+
+  bool get _canEdit => widget.fromAddressBook == true;
 
   Map<String, String> _splitAddress(String s) {
     final p = s.split(',').map((e) => e.trim()).toList();
@@ -69,8 +73,32 @@ class _AddressDetailPageState extends State<AddressDetailPage> {
     _nameCtrl = TextEditingController(text: widget.name);
     _phoneCtrl = TextEditingController(text: widget.phone);
 
+    // ถ้าส่งพิกัดมาก็ใช้เลย
     if (widget.lat != null && widget.lng != null) {
       _addressPin = LatLng(widget.lat!, widget.lng!);
+    }
+
+    // ทางแก้ B: ถ้าไม่ส่งพิกัดมา ให้โหลดจาก Firestore ด้วย addressDocId
+    _ensurePinFromFirestore();
+  }
+
+  /// โหลดพิกัดจาก Firestore หาก `_addressPin` ยังเป็น null และมี `addressDocId`
+  Future<void> _ensurePinFromFirestore() async {
+    if (_addressPin != null) return;
+    if (widget.addressDocId == null) return;
+    try {
+      final doc = await FirebaseFirestore.instance
+          .collection('user_address')
+          .doc(widget.addressDocId)
+          .get();
+      final data = doc.data();
+      final lat = (data?['lat'] as num?)?.toDouble();
+      final lng = (data?['lng'] as num?)?.toDouble();
+      if (lat != null && lng != null && mounted) {
+        setState(() => _addressPin = LatLng(lat, lng));
+      }
+    } catch (_) {
+      // ถ้าโหลดไม่ได้ ปล่อยเป็น null ให้ขึ้นปุ่ม + ตามเดิม
     }
   }
 
@@ -86,8 +114,9 @@ class _AddressDetailPageState extends State<AddressDetailPage> {
     super.dispose();
   }
 
-  // ---- เปิดหน้าเลือกพิกัด ----
+  // เปิดหน้าเลือกพิกัด (เฉพาะตอนแก้ไข)
   Future<void> _openPinLocation() async {
+    if (!_isEditing) return;
     final LatLng? newPin = await Navigator.push(
       context,
       MaterialPageRoute(builder: (_) => const PinLocationPage()),
@@ -97,7 +126,7 @@ class _AddressDetailPageState extends State<AddressDetailPage> {
     }
   }
 
-  // ---- บันทึก ----
+  // บันทึก
   Future<void> _save() async {
     final addr = _composeAddress();
     try {
@@ -129,6 +158,8 @@ class _AddressDetailPageState extends State<AddressDetailPage> {
 
   @override
   Widget build(BuildContext context) {
+    const headlineSize = 26.0;
+
     return Scaffold(
       body: SafeArea(
         child: Stack(
@@ -152,7 +183,7 @@ class _AddressDetailPageState extends State<AddressDetailPage> {
             ),
             Column(
               children: [
-                // header
+                // Header
                 Container(
                   padding: const EdgeInsets.symmetric(
                     horizontal: 12,
@@ -179,7 +210,7 @@ class _AddressDetailPageState extends State<AddressDetailPage> {
                           'รายละเอียดที่อยู่',
                           textAlign: TextAlign.center,
                           style: TextStyle(
-                            fontSize: 26,
+                            fontSize: headlineSize,
                             fontWeight: FontWeight.w900,
                             color: Colors.black,
                             shadows: [
@@ -193,7 +224,7 @@ class _AddressDetailPageState extends State<AddressDetailPage> {
                   ),
                 ),
 
-                // card
+                // Card
                 Expanded(
                   child: SingleChildScrollView(
                     padding: const EdgeInsets.fromLTRB(18, 16, 18, 16),
@@ -271,15 +302,19 @@ class _AddressDetailPageState extends State<AddressDetailPage> {
                                   ),
                                   const SizedBox(height: 16),
 
-                                  // =========================
-                                  // หมุดที่อยู่ (เหมือนตัวอย่างสมัคร)
-                                  // =========================
+                                  // หมุดที่อยู่
                                   _GroupBox(
                                     title: 'หมุดที่อยู่',
-                                    trailing: const Icon(Icons.chevron_right),
-                                    onHeaderTap: _openPinLocation,
+                                    trailing: _isEditing
+                                        ? const Icon(Icons.chevron_right)
+                                        : null,
+                                    onHeaderTap: _isEditing
+                                        ? _openPinLocation
+                                        : null,
                                     child: GestureDetector(
-                                      onTap: _openPinLocation,
+                                      onTap: _isEditing
+                                          ? _openPinLocation
+                                          : null,
                                       child: Container(
                                         height: 180,
                                         margin: const EdgeInsets.only(top: 10),
@@ -311,8 +346,7 @@ class _AddressDetailPageState extends State<AddressDetailPage> {
                                                       ignoring: true,
                                                       child: FlutterMap(
                                                         key: ValueKey(
-                                                          '${_addressPin!.latitude.toStringAsFixed(6)},'
-                                                          '${_addressPin!.longitude.toStringAsFixed(6)}',
+                                                          '${_addressPin!.latitude.toStringAsFixed(6)},${_addressPin!.longitude.toStringAsFixed(6)}',
                                                         ),
                                                         options: MapOptions(
                                                           initialCenter:
@@ -377,83 +411,87 @@ class _AddressDetailPageState extends State<AddressDetailPage> {
                               ),
                             ),
 
-                            // ปุ่มแก้ไข / บันทึก มุมขวาล่าง
-                            Positioned(
-                              right: 16,
-                              bottom: 16,
-                              child: _isEditing
-                                  ? Row(
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        ElevatedButton.icon(
-                                          onPressed: _save,
-                                          icon: const Icon(Icons.save),
-                                          label: const Text('บันทึก'),
-                                          style: ElevatedButton.styleFrom(
-                                            backgroundColor: const Color(
-                                              0xFFE96356,
-                                            ),
-                                            foregroundColor: Colors.black,
-                                            shape: RoundedRectangleBorder(
-                                              borderRadius:
-                                                  BorderRadius.circular(12),
-                                              side: BorderSide(
-                                                color: Colors.black.withOpacity(
-                                                  0.35,
+                            // ปุ่มแก้ไข/บันทึก — แสดงเฉพาะมาจาก address_book
+                            if (_canEdit)
+                              Positioned(
+                                right: 16,
+                                bottom: 16,
+                                child: _isEditing
+                                    ? Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          ElevatedButton.icon(
+                                            onPressed: _save,
+                                            icon: const Icon(Icons.save),
+                                            label: const Text('บันทึก'),
+                                            style: ElevatedButton.styleFrom(
+                                              backgroundColor: const Color(
+                                                0xFFE96356,
+                                              ),
+                                              foregroundColor: Colors.black,
+                                              shape: RoundedRectangleBorder(
+                                                borderRadius:
+                                                    BorderRadius.circular(12),
+                                                side: BorderSide(
+                                                  color: Colors.black
+                                                      .withOpacity(0.35),
+                                                  width: 1,
                                                 ),
-                                                width: 1,
                                               ),
                                             ),
                                           ),
-                                        ),
-                                        const SizedBox(width: 8),
-                                        OutlinedButton.icon(
-                                          onPressed: () {
-                                            final a = _splitAddress(
-                                              widget.fullAddress,
-                                            );
-                                            _hno.text = a['hno']!;
-                                            _sub.text = a['sub']!;
-                                            _dist.text = a['dist']!;
-                                            _prov.text = a['prov']!;
-                                            _zip.text = a['zip']!;
-                                            // คืนพิกัดเดิมจาก widget
-                                            if (widget.lat != null &&
-                                                widget.lng != null) {
-                                              _addressPin = LatLng(
-                                                widget.lat!,
-                                                widget.lng!,
+                                          const SizedBox(width: 8),
+                                          OutlinedButton.icon(
+                                            onPressed: () {
+                                              final a = _splitAddress(
+                                                widget.fullAddress,
                                               );
-                                            } else {
-                                              _addressPin = null;
-                                            }
-                                            setState(() => _isEditing = false);
-                                          },
-                                          icon: const Icon(Icons.close),
-                                          label: const Text('ยกเลิก'),
-                                          style: OutlinedButton.styleFrom(
-                                            foregroundColor: Colors.black,
-                                            side: const BorderSide(
-                                              color: Colors.black,
-                                              width: 1.2,
-                                            ),
-                                            shape: RoundedRectangleBorder(
-                                              borderRadius:
-                                                  BorderRadius.circular(12),
+                                              _hno.text = a['hno']!;
+                                              _sub.text = a['sub']!;
+                                              _dist.text = a['dist']!;
+                                              _prov.text = a['prov']!;
+                                              _zip.text = a['zip']!;
+                                              // คืนพิกัดเดิมจาก widget
+                                              if (widget.lat != null &&
+                                                  widget.lng != null) {
+                                                _addressPin = LatLng(
+                                                  widget.lat!,
+                                                  widget.lng!,
+                                                );
+                                              } else {
+                                                _addressPin = null;
+                                              }
+                                              setState(
+                                                () => _isEditing = false,
+                                              );
+                                            },
+                                            icon: const Icon(Icons.close),
+                                            label: const Text('ยกเลิก'),
+                                            style: OutlinedButton.styleFrom(
+                                              foregroundColor: Colors.black,
+                                              side: const BorderSide(
+                                                color: Colors.black,
+                                                width: 1.2,
+                                              ),
+                                              shape: RoundedRectangleBorder(
+                                                borderRadius:
+                                                    BorderRadius.circular(12),
+                                              ),
                                             ),
                                           ),
+                                        ],
+                                      )
+                                    : FloatingActionButton.extended(
+                                        onPressed: () =>
+                                            setState(() => _isEditing = true),
+                                        icon: const Icon(Icons.edit),
+                                        label: const Text('แก้ไข'),
+                                        backgroundColor: const Color(
+                                          0xFFE96356,
                                         ),
-                                      ],
-                                    )
-                                  : FloatingActionButton.extended(
-                                      onPressed: () =>
-                                          setState(() => _isEditing = true),
-                                      icon: const Icon(Icons.edit),
-                                      label: const Text('แก้ไข'),
-                                      backgroundColor: const Color(0xFFE96356),
-                                      foregroundColor: Colors.black,
-                                    ),
-                            ),
+                                        foregroundColor: Colors.black,
+                                      ),
+                              ),
                           ],
                         ),
                       ),

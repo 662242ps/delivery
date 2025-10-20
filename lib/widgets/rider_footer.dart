@@ -7,7 +7,7 @@ const Color kBrandRed = Color(0xFFE96356);
 class RiderFooterItem {
   const RiderFooterItem(this.label, this.baseNumber);
   final String label;
-  final int baseNumber;
+  final int baseNumber; // เวอร์ชัน icon ปกติ (active = baseNumber+1)
 }
 
 class RiderFooterNavBar extends StatelessWidget {
@@ -24,7 +24,7 @@ class RiderFooterNavBar extends StatelessWidget {
     required this.pageBuilders,
   });
 
-  /// ✅ Factory Constructor ใช้เพื่อคำนวณ pageBuilders หลังจากได้ userId แล้ว
+  /// ✅ Factory: คำนวณ pageBuilders หลังรู้ userId
   factory RiderFooterNavBar({
     Key? key,
     required String userId,
@@ -48,24 +48,32 @@ class RiderFooterNavBar extends StatelessWidget {
     RiderFooterItem('โปรไฟล์', 9),
   ];
 
-  /// ✅ ฟังก์ชันสร้างเพจ พร้อมส่ง userId
+  /// ✅ เพจเริ่มต้น (ใส่ userId ให้ทุกหน้า)
   static List<WidgetBuilder> _defaultPageBuilders(String userId) => [
-        (ctx) => JobsPage(userId: userId),        // ✅ ส่ง userId
-        (ctx) => JobsPage(userId: userId),        // TODO: HistoryPage
-        (ctx) => JobsPage(userId: userId),        // TODO: VehiclePage
-        (ctx) => ProfileRiderPage(userId: userId) // ✅ ส่ง userId
-      ];
+    (ctx) => JobsPage(userId: userId), // ดูงาน
+    (ctx) => JobsPage(userId: userId), // TODO: HistoryPage
+    (ctx) => JobsPage(userId: userId), // TODO: VehiclePage
+    (ctx) => ProfileRiderPage(userId: userId), // โปรไฟล์ไรเดอร์
+  ];
 
   String _iconPath(int base, bool active) =>
       'assets/Icons/${active ? base + 1 : base}.png';
 
   void _handleTap(BuildContext context, int index) {
-    if (index >= 0 && index < pageBuilders.length) {
-      Navigator.of(context).pushReplacement(
-        MaterialPageRoute(builder: pageBuilders[index]),
-      );
+    // 🔒 ถ้าแท็บเดิม ไม่ต้องนำทางซ้ำ (กันกะพิบ/ซ้อน route)
+    if (index == currentIndex) {
+      onTap?.call(index);
+      return;
     }
+
     onTap?.call(index);
+
+    if (index >= 0 && index < pageBuilders.length) {
+      // 🛡️ ใช้ route ที่ไม่มีอนิเมชันเพื่อสลับแท็บ (ไม่ชน FadeThrough ทั่วแอป)
+      Navigator.of(
+        context,
+      ).pushReplacement(_NoAnimationPageRoute(builder: pageBuilders[index]));
+    }
   }
 
   @override
@@ -138,4 +146,17 @@ class RiderFooterNavBar extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Route ไม่ใส่อนิเมชัน — ใช้เฉพาะเวลาสลับแท็บผ่าน Footer (กันแฟลช/กะพิบ)
+class _NoAnimationPageRoute<T> extends PageRouteBuilder<T> {
+  _NoAnimationPageRoute({required WidgetBuilder builder})
+    : super(
+        pageBuilder: (context, animation, secondaryAnimation) =>
+            builder(context),
+        transitionDuration: Duration.zero,
+        reverseTransitionDuration: Duration.zero,
+        opaque: true,
+        barrierDismissible: false,
+      );
 }
