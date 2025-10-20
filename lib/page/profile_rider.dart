@@ -3,12 +3,18 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter_application_4/page/login.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:flutter_application_4/widgets/rider_footer.dart'; // ✅ ใช้ lowercase
+import 'package:flutter_application_4/widgets/rider_footer.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 class ProfileRiderPage extends StatefulWidget {
-  final String userId; // ✅ รับ userId จาก Login
-  const ProfileRiderPage({super.key, required this.userId});
+  final String userId; // ✅ id ของไรเดอร์
+  final bool hideChrome; // ✅ true = ซ่อนปุ่มออกจากระบบ + footer
+
+  const ProfileRiderPage({
+    super.key,
+    required this.userId,
+    this.hideChrome = false,
+  });
 
   @override
   State<ProfileRiderPage> createState() => _ProfileRiderPageState();
@@ -20,7 +26,7 @@ class _ProfileRiderPageState extends State<ProfileRiderPage> {
   final _picker = ImagePicker();
   XFile? _avatar;
 
-  late Future<Map<String, dynamic>?> _futureRider; // ✅ เก็บ future
+  late Future<Map<String, dynamic>?> _futureRider;
 
   @override
   void initState() {
@@ -28,23 +34,12 @@ class _ProfileRiderPageState extends State<ProfileRiderPage> {
     _futureRider = _getRiderData();
   }
 
-  /// ✅ ดึงข้อมูล Rider จาก Firestore
   Future<Map<String, dynamic>?> _getRiderData() async {
     final doc = await FirebaseFirestore.instance
-        .collection('user') // ถ้า rider แยก collection ต้องแก้ตรงนี้
+        .collection('user') // ถ้าคุณแยก collection rider ให้แก้ชื่อนี้
         .doc(widget.userId)
         .get();
-
-    if (doc.exists) {
-      return doc.data();
-    }
-    return null;
-  }
-
-  void _openAddressBook() {
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(const SnackBar(content: Text('ไปสมุดที่อยู่ (TODO)')));
+    return doc.data();
   }
 
   void _logout() {
@@ -68,9 +63,9 @@ class _ProfileRiderPageState extends State<ProfileRiderPage> {
           }
 
           final rider = snapshot.data!;
-          final name = rider['name'] ?? '-';
-          final phone = rider['phone'] ?? '-';
-          final picture = rider['picture']; // ✅ URL จาก Firestore
+          final name = (rider['name'] ?? '-') as String;
+          final phone = (rider['phone'] ?? '-') as String;
+          final picture = rider['picture']; // URL
 
           return Stack(
             children: [
@@ -102,22 +97,39 @@ class _ProfileRiderPageState extends State<ProfileRiderPage> {
                           bottom: BorderSide(color: Colors.black, width: 2),
                         ),
                       ),
-                      padding: const EdgeInsets.symmetric(vertical: 10),
-                      alignment: Alignment.center,
-                      child: const Text(
-                        'โปรไฟล์ไรเดอร์',
-                        style: TextStyle(
-                          fontSize: 28,
-                          fontWeight: FontWeight.w900,
-                          color: Colors.black,
-                          shadows: [
-                            Shadow(
-                              blurRadius: 1.5,
-                              offset: Offset(0.8, 0.8),
-                              color: Colors.white,
+                      padding: const EdgeInsets.symmetric(
+                        vertical: 10,
+                        horizontal: 6,
+                      ),
+                      child: Row(
+                        children: [
+                          IconButton(
+                            onPressed: () => Navigator.maybePop(context),
+                            icon: const Icon(
+                              Icons.arrow_back,
+                              color: Colors.black,
                             ),
-                          ],
-                        ),
+                          ),
+                          const Expanded(
+                            child: Text(
+                              'โปรไฟล์ไรเดอร์',
+                              textAlign: TextAlign.center,
+                              style: TextStyle(
+                                fontSize: 28,
+                                fontWeight: FontWeight.w900,
+                                color: Colors.black,
+                                shadows: [
+                                  Shadow(
+                                    blurRadius: 1.5,
+                                    offset: Offset(0.8, 0.8),
+                                    color: Colors.white,
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 48),
+                        ],
                       ),
                     ),
 
@@ -174,51 +186,48 @@ class _ProfileRiderPageState extends State<ProfileRiderPage> {
                                     ),
                                     const SizedBox(height: 22),
 
-                                    // เบอร์โทร
                                     _InfoRow(label: 'เบอร์โทร :', value: phone),
                                     const SizedBox(height: 18),
-
-                                    // ชื่อ - นามสกุล
                                     _InfoRow(
                                       label: 'ชื่อ - นามสกุล :',
                                       value: name,
                                     ),
                                     const SizedBox(height: 18),
 
-                                    // Logout button
-                                    SizedBox(
-                                      width: 220,
-                                      child: ElevatedButton(
-                                        style: ElevatedButton.styleFrom(
-                                          backgroundColor: _brandRed,
-                                          foregroundColor: Colors.black,
-                                          padding: const EdgeInsets.symmetric(
-                                            vertical: 14,
-                                          ),
-                                          shape: RoundedRectangleBorder(
-                                            borderRadius: BorderRadius.circular(
-                                              14,
+                                    // ปุ่มออกจากระบบ — แสดงเฉพาะเมื่อไม่ซ่อน chrome
+                                    if (!widget.hideChrome)
+                                      SizedBox(
+                                        width: 220,
+                                        child: ElevatedButton(
+                                          style: ElevatedButton.styleFrom(
+                                            backgroundColor: _brandRed,
+                                            foregroundColor: Colors.black,
+                                            padding: const EdgeInsets.symmetric(
+                                              vertical: 14,
                                             ),
-                                            side: BorderSide(
-                                              color: Colors.black.withOpacity(
-                                                0.35,
+                                            shape: RoundedRectangleBorder(
+                                              borderRadius:
+                                                  BorderRadius.circular(14),
+                                              side: BorderSide(
+                                                color: Colors.black.withOpacity(
+                                                  0.35,
+                                                ),
+                                                width: 1,
                                               ),
-                                              width: 1,
                                             ),
+                                            elevation: 6,
+                                            shadowColor: Colors.black45,
                                           ),
-                                          elevation: 6,
-                                          shadowColor: Colors.black45,
-                                        ),
-                                        onPressed: _logout,
-                                        child: const Text(
-                                          'ออกจากระบบ',
-                                          style: TextStyle(
-                                            fontWeight: FontWeight.w800,
-                                            fontSize: 18,
+                                          onPressed: _logout,
+                                          child: const Text(
+                                            'ออกจากระบบ',
+                                            style: TextStyle(
+                                              fontWeight: FontWeight.w800,
+                                              fontSize: 18,
+                                            ),
                                           ),
                                         ),
                                       ),
-                                    ),
                                   ],
                                 ),
                               ),
@@ -234,22 +243,19 @@ class _ProfileRiderPageState extends State<ProfileRiderPage> {
           );
         },
       ),
-      // ✅ ส่ง userId ให้ RiderFooterNavBar ด้วย
-      bottomNavigationBar: RiderFooterNavBar(
-        currentIndex: 3,
-        userId: widget.userId,
-      ),
+
+      // footer — แสดงเฉพาะเมื่อไม่ซ่อน chrome
+      bottomNavigationBar: widget.hideChrome
+          ? null
+          : RiderFooterNavBar(currentIndex: 3, userId: widget.userId),
     );
   }
 }
 
-/// แถวข้อมูลกรอบโค้ง
+/// แถวข้อมูล
 class _InfoRow extends StatelessWidget {
   const _InfoRow({required this.label, this.value, this.valueWidget})
-    : assert(
-        value != null || valueWidget != null,
-        'ต้องใส่ value หรือ valueWidget อย่างน้อยหนึ่งตัว',
-      );
+    : assert(value != null || valueWidget != null);
 
   final String label;
   final String? value;
