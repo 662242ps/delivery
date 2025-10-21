@@ -1,5 +1,5 @@
 import 'dart:async';
-import 'dart:ui' as ui; // ใช้ prefix ป้องกันชนชื่อบน web
+import 'dart:ui' as ui;
 import 'dart:math' as math;
 
 import 'package:async/async.dart';
@@ -27,13 +27,17 @@ class _UserDeliveryMapPageState extends State<UserDeliveryMapPage> {
   final _firestore = FirebaseFirestore.instance;
   final _lookup = DeliveryLookupCache();
 
-  bool _showMyAddresses = true;
-  bool _showReceiverAddresses = true;
-  bool _showSenderRiders = true;
-  bool _showReceiverRiders = true;
+  // ฟิลเตอร์การแสดงผล
+  bool _showMyAddresses = true; // พิกัดคุณ (ที่อยู่ของฉัน)
+  bool _showReceiverAddresses = true; // พิกัดผู้รับ (งานที่ฉันเป็นผู้ส่ง)
+  bool _showSenderRiders =
+      true; // ไรเดอร์ที่ "กำลังส่ง" ให้ผู้รับ (งานที่ฉันเป็นผู้ส่ง)
+  bool _showReceiverRiders =
+      true; // ไรเดอร์ที่ "กำลังมารับ/ส่งให้ฉัน" (งานที่ฉันเป็นผู้รับ)
 
   bool _hasCentered = false;
 
+  // ---------- Utilities ----------
   Future<Map<String, AddressSummary>> _loadAddresses(
     Iterable<String> ids,
   ) async {
@@ -54,6 +58,7 @@ class _UserDeliveryMapPageState extends State<UserDeliveryMapPage> {
     return out;
   }
 
+  // รวมสตรีมตำแหน่งไรเดอร์แบบเรียลไทม์ (จำกัด whereIn <= 10)
   Stream<List<QuerySnapshot<Map<String, dynamic>>>> _riderLocationsStream(
     Set<String> riderIds,
   ) {
@@ -149,15 +154,7 @@ class _UserDeliveryMapPageState extends State<UserDeliveryMapPage> {
           _topButton(
             active: _showSenderRiders,
             label: 'ส่งสินค้า',
-            icon: Image.asset(
-              'assets/images/rider_red.png',
-              height: 20,
-              errorBuilder: (_, __, ___) => const Icon(
-                Icons.delivery_dining,
-                color: Colors.red,
-                size: 20,
-              ),
-            ),
+            icon: const Icon(Icons.two_wheeler, size: 20, color: Colors.orange),
             onTap: () => setState(() {
               _showSenderRiders = !_showSenderRiders;
               _hasCentered = false;
@@ -167,12 +164,7 @@ class _UserDeliveryMapPageState extends State<UserDeliveryMapPage> {
           _topButton(
             active: _showReceiverRiders,
             label: 'รับสินค้า',
-            icon: Image.asset(
-              'assets/images/rider_black.png',
-              height: 20,
-              errorBuilder: (_, __, ___) =>
-                  const Icon(Icons.pedal_bike, color: Colors.black87, size: 20),
-            ),
+            icon: const Icon(Icons.pedal_bike, size: 20, color: Colors.black87),
             onTap: () => setState(() {
               _showReceiverRiders = !_showReceiverRiders;
               _hasCentered = false;
@@ -236,18 +228,18 @@ class _UserDeliveryMapPageState extends State<UserDeliveryMapPage> {
     );
   }
 
-  // ---------- Pins: ปลายแหลม = จุดพิกัด ----------
+  // ---------- Pins ----------
   Marker _pinCircle({
     required LatLng point,
     required Color color,
-    required IconData icon, // เก็บไว้เผื่อใช้ต่อ
+    required IconData icon,
     double size = 40,
   }) {
     return Marker(
       point: point,
       width: size,
       height: size,
-      alignment: Alignment.center, // จุดพิกัดอยู่ "กลางวิดเจ็ต" = ปลายแหลม
+      alignment: Alignment.center,
       child: CustomPaint(
         size: Size(size, size),
         painter: _TipAtCenterPinPainter(fill: color, stroke: Colors.black),
@@ -258,7 +250,7 @@ class _UserDeliveryMapPageState extends State<UserDeliveryMapPage> {
   Marker _pinLabel({
     required LatLng point,
     required String text,
-    double above = 48, // anchor อยู่กลางหมุด จึงดันขึ้นให้พ้นหัวหมุด
+    double above = 48,
   }) {
     return Marker(
       point: point,
@@ -288,6 +280,7 @@ class _UserDeliveryMapPageState extends State<UserDeliveryMapPage> {
     );
   }
 
+  // ---------- Map builder ----------
   Widget _buildMapView({
     required List<AddressSummary> myAddresses,
     required List<DeliveryRecord> senderRecords,
@@ -298,7 +291,7 @@ class _UserDeliveryMapPageState extends State<UserDeliveryMapPage> {
     final markers = <Marker>[];
     final points = <LatLng>[];
 
-    // พิกัดคุณ
+    // พิกัดคุณ (ที่อยู่ของฉัน)
     if (_showMyAddresses) {
       for (final addr in myAddresses) {
         if (addr.lat != null && addr.lng != null) {
@@ -318,7 +311,7 @@ class _UserDeliveryMapPageState extends State<UserDeliveryMapPage> {
       }
     }
 
-    // พิกัดผู้รับ
+    // พิกัดผู้รับ (เฉพาะงานที่เราเป็นผู้ส่ง)
     if (_showReceiverAddresses) {
       for (final rec in senderRecords) {
         final a = addressMap[rec.receiverAddressId ?? ''];
@@ -339,7 +332,7 @@ class _UserDeliveryMapPageState extends State<UserDeliveryMapPage> {
       }
     }
 
-    // ไรเดอร์ส่ง
+    // ไรเดอร์กำลัง "ส่ง" (งานที่เราเป็นผู้ส่ง)
     if (_showSenderRiders) {
       for (final rec in senderRecords) {
         final id = rec.riderId;
@@ -360,7 +353,7 @@ class _UserDeliveryMapPageState extends State<UserDeliveryMapPage> {
       }
     }
 
-    // ไรเดอร์รับ
+    // ไรเดอร์กำลัง "รับ/นำส่งให้ฉัน" (งานที่เราเป็นผู้รับ)
     if (_showReceiverRiders) {
       for (final rec in receiverRecords) {
         final id = rec.riderId;
@@ -393,7 +386,7 @@ class _UserDeliveryMapPageState extends State<UserDeliveryMapPage> {
     _centerIfNeeded(points);
     final initialCenter = points.isNotEmpty
         ? points.first
-        : LatLng(13.7563, 100.5018);
+        : const LatLng(13.7563, 100.5018);
 
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
@@ -411,7 +404,6 @@ class _UserDeliveryMapPageState extends State<UserDeliveryMapPage> {
             flags: InteractiveFlag.all,
           ),
         ),
-        // <<< สำคัญ: ใส่ MarkerLayer ที่นี่ >>>
         children: [
           TileLayer(
             urlTemplate: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
@@ -430,6 +422,7 @@ class _UserDeliveryMapPageState extends State<UserDeliveryMapPage> {
     );
   }
 
+  // ---------- Build ----------
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -481,6 +474,7 @@ class _UserDeliveryMapPageState extends State<UserDeliveryMapPage> {
                               .toList() ??
                           [];
 
+                      // งานที่เราเป็น "ผู้ส่ง"
                       return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
                         stream: _firestore
                             .collection('delivery')
@@ -507,6 +501,7 @@ class _UserDeliveryMapPageState extends State<UserDeliveryMapPage> {
                                   .toList() ??
                               [];
 
+                          // งานที่เราเป็น "ผู้รับ"
                           return StreamBuilder<
                             QuerySnapshot<Map<String, dynamic>>
                           >(
@@ -538,6 +533,7 @@ class _UserDeliveryMapPageState extends State<UserDeliveryMapPage> {
                                       .toList() ??
                                   [];
 
+                              // โหลดที่อยู่ปลายทางทั้งหมด (ของผู้รับสำหรับ senderRecords และของผู้ส่งสำหรับ receiverRecords)
                               final addressIds = <String>{
                                 ...senderRecords
                                     .map((rec) => rec.receiverAddressId ?? '')
@@ -565,6 +561,7 @@ class _UserDeliveryMapPageState extends State<UserDeliveryMapPage> {
                                   }
                                   final addressMap = addrSnapshot.data ?? {};
 
+                                  // รวบรวมไอดีไรเดอร์ที่เกี่ยวข้องทั้งหมด
                                   final riderIds = <String>{
                                     ...senderRecords
                                         .map((rec) => rec.riderId ?? '')
@@ -574,6 +571,7 @@ class _UserDeliveryMapPageState extends State<UserDeliveryMapPage> {
                                         .where((id) => id.isNotEmpty),
                                   };
 
+                                  // ถ้ายังไม่มีไรเดอร์ (ยังไม่ถูกจับคู่) ก็วาดเฉพาะหมุดที่อยู่
                                   if (riderIds.isEmpty) {
                                     return _buildMapView(
                                       myAddresses: myAddresses,
@@ -584,6 +582,7 @@ class _UserDeliveryMapPageState extends State<UserDeliveryMapPage> {
                                     );
                                   }
 
+                                  // ตำแหน่งไรเดอร์แบบเรียลไทม์
                                   return StreamBuilder<
                                     List<QuerySnapshot<Map<String, dynamic>>>
                                   >(
@@ -650,20 +649,19 @@ class _UserDeliveryMapPageState extends State<UserDeliveryMapPage> {
   }
 }
 
-// ===== Painter: วาดหมุดให้ "ปลายแหลม" อยู่ตรงกึ่งกลางวิดเจ็ต (คือจุดพิกัด) =====
+// ===== Painter: หมุดปลายแหลมชี้ตรงจุดพิกัด =====
 class _TipAtCenterPinPainter extends CustomPainter {
   final Color fill;
   final Color stroke;
-
   _TipAtCenterPinPainter({required this.fill, required this.stroke});
 
   @override
   void paint(ui.Canvas canvas, ui.Size s) {
     final cx = s.width / 2;
     final cy = s.height / 2;
-    final tip = ui.Offset(cx, cy); // จุดพิกัด = ปลายแหลม
+    final tip = ui.Offset(cx, cy);
 
-    final r = s.width * 0.22; // รัศมีหัวหมุด
+    final r = s.width * 0.22;
     final tailH = s.height * 0.28;
     final baseY = cy - tailH;
 

@@ -22,13 +22,9 @@ class DeliveryStatus {
 
   /// Alias จากข้อมูลเก่า/ชื่อที่สั้นลง เพื่อให้รองรับฐานข้อมูลเดิม
   static const Map<String, String> _aliases = {
-    'รอไรเดอร์': waitingForRider,
     'รอไรเดอร์มารับสินค้า': waitingForRider,
     'ไรเดอร์รับงาน': riderAccepted,
-    'ไรเดอร์รับงาน (กำลังเดินทางมารับสินค้า)': riderAccepted,
-    'ไรเดอร์รับสินค้าแล้ว': riderPickedUp,
     'ไรเดอร์รับสินค้าแล้วและกำลังเดินทางไปส่ง': riderPickedUp,
-    'จัดส่งสำเร็จ': delivered,
     'ไรเดอร์นำส่งสินค้าแล้ว': delivered,
   };
 

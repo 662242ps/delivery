@@ -1,7 +1,8 @@
+// lib/page/jobs.dart
 import 'dart:ui';
-
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
+
 import 'package:flutter_application_4/page/rider_active_delivery_map.dart';
 import 'package:flutter_application_4/page/rider_job_detail.dart';
 import 'package:flutter_application_4/utils/delivery_lookup.dart';
@@ -29,15 +30,17 @@ class _JobsPageState extends State<JobsPage> {
     _checkActiveDelivery();
   }
 
+  /// ✅ ดูเฉพาะ "งานของเรา" แล้วค่อยเช็คสถานะที่ต้องขึ้นแผนที่
   Future<void> _checkActiveDelivery() async {
     try {
-      final snapshot = await _firestore
+      final mine = await _firestore
           .collection('delivery')
-          .where('riderid', isEqualTo: widget.userId)
+          .where('riderId', isEqualTo: widget.userId)
           .get();
-      for (final doc in snapshot.docs) {
-        final data = doc.data();
-        final status = DeliveryStatus.normalize(data['status']?.toString());
+
+      for (final doc in mine.docs) {
+        final d = doc.data();
+        final status = DeliveryStatus.normalize(d['status']?.toString());
         if (DeliveryStatus.isMapRelated(status) &&
             status != DeliveryStatus.waitingForRider) {
           if (!mounted) return;
@@ -53,16 +56,14 @@ class _JobsPageState extends State<JobsPage> {
         }
       }
     } finally {
-      if (mounted) {
-        setState(() => _checkingActive = false);
-      }
+      if (mounted) setState(() => _checkingActive = false);
     }
   }
 
+  /// ❗ ไม่เรียง (ตัด orderBy) เพื่อเลี่ยง index
   Stream<QuerySnapshot<Map<String, dynamic>>> get _jobsStream => _firestore
       .collection('delivery')
       .where('status', isEqualTo: DeliveryStatus.waitingForRider)
-      .orderBy('created_at', descending: true)
       .snapshots();
 
   void _openDetail(String deliveryId) {
@@ -94,7 +95,7 @@ class _JobsPageState extends State<JobsPage> {
                 gradient: LinearGradient(
                   begin: Alignment.topCenter,
                   end: Alignment.bottomCenter,
-                  colors: [Colors.transparent, Colors.black38],
+                  colors: [Colors.transparent, Colors.black26],
                 ),
               ),
             ),
@@ -106,53 +107,66 @@ class _JobsPageState extends State<JobsPage> {
                   decoration: const BoxDecoration(
                     color: _brandRed,
                     border: Border(
-                      bottom: BorderSide(color: Colors.black, width: 2),
+                      bottom: BorderSide(color: Colors.black, width: 3),
                     ),
                   ),
                   padding: const EdgeInsets.symmetric(vertical: 12),
                   alignment: Alignment.center,
-                  child: const Text(
+                  child: const _StrokeText(
                     'รายการงาน',
-                    style: TextStyle(
-                      fontSize: 28,
-                      fontWeight: FontWeight.w900,
-                      color: Colors.black,
-                    ),
+                    fillColor: Colors.white,
+                    strokeColor: Colors.black,
+                    strokeWidth: 4,
+                    style: TextStyle(fontSize: 28, fontWeight: FontWeight.w900),
                   ),
                 ),
                 Expanded(
                   child: Padding(
                     padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
                     child: ClipRRect(
-                      borderRadius: BorderRadius.circular(24),
+                      borderRadius: BorderRadius.circular(26),
                       child: BackdropFilter(
                         filter: ImageFilter.blur(sigmaX: 8, sigmaY: 8),
                         child: Container(
                           decoration: BoxDecoration(
-                            color: Colors.white.withOpacity(0.82),
-                            borderRadius: BorderRadius.circular(24),
-                            border: Border.all(color: Colors.black54, width: 1.6),
+                            color: Colors.white.withOpacity(0.88),
+                            borderRadius: BorderRadius.circular(26),
+                            border: Border.all(color: Colors.black54, width: 2),
                           ),
                           child: _checkingActive
-                              ? const Center(child: CircularProgressIndicator())
-                              : StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                              ? const Center(
+                                  child: CircularProgressIndicator(
+                                    color: _brandRed,
+                                  ),
+                                )
+                              : StreamBuilder<
+                                  QuerySnapshot<Map<String, dynamic>>
+                                >(
                                   stream: _jobsStream,
                                   builder: (context, snapshot) {
                                     if (snapshot.connectionState ==
                                         ConnectionState.waiting) {
                                       return const Center(
-                                          child: CircularProgressIndicator());
+                                        child: CircularProgressIndicator(
+                                          color: _brandRed,
+                                        ),
+                                      );
                                     }
                                     if (snapshot.hasError) {
                                       return Center(
-                                        child: Text(
-                                            'เกิดข้อผิดพลาด: ${snapshot.error}'),
+                                        child: Padding(
+                                          padding: const EdgeInsets.all(16),
+                                          child: Text(
+                                            'เกิดข้อผิดพลาด: ${snapshot.error}',
+                                          ),
+                                        ),
                                       );
                                     }
 
                                     final records = (snapshot.data?.docs ?? [])
                                         .map((doc) => DeliveryRecord(doc))
                                         .toList();
+
                                     if (records.isEmpty) {
                                       return const Center(
                                         child: Text('ยังไม่มีงานรอรับ'),
@@ -161,9 +175,9 @@ class _JobsPageState extends State<JobsPage> {
 
                                     return ListView.builder(
                                       padding: const EdgeInsets.fromLTRB(
-                                        18,
                                         16,
-                                        18,
+                                        16,
+                                        16,
                                         24,
                                       ),
                                       itemCount: records.length,
@@ -208,17 +222,11 @@ class _RiderJobCard extends StatelessWidget {
   final VoidCallback onTap;
 
   Future<_CardData> _load() async {
-    final senderAddress = await lookup.getAddress(record.senderAddressId);
-    final receiverAddress = await lookup.getAddress(record.receiverAddressId);
-    final sender = await lookup.getUser(record.senderId);
-    final receiver = await lookup.getUser(record.receiverId);
+    final senderAddr = await lookup.getAddress(record.senderAddressId);
+    final receiverAddr = await lookup.getAddress(record.receiverAddressId);
     return _CardData(
-      senderText:
-          '${sender?.name ?? record.senderName ?? '-'} | ${sender?.phone ?? record.senderPhone ?? '-'}',
-      receiverText:
-          '${receiver?.name ?? record.receiverName ?? '-'} | ${receiver?.phone ?? record.receiverPhone ?? '-'}',
-      pickup: senderAddress?.address ?? '-',
-      dropoff: receiverAddress?.address ?? '-',
+      pickup: senderAddr?.address ?? '-',
+      dropoff: receiverAddr?.address ?? '-',
     );
   }
 
@@ -226,44 +234,71 @@ class _RiderJobCard extends StatelessWidget {
   Widget build(BuildContext context) {
     return FutureBuilder<_CardData>(
       future: _load(),
-      builder: (context, snapshot) {
-        final data = snapshot.data;
+      builder: (context, snap) {
+        final data = snap.data;
+
         return GestureDetector(
           onTap: onTap,
           child: Container(
-            margin: const EdgeInsets.only(bottom: 16),
+            margin: const EdgeInsets.only(bottom: 14),
             padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
             decoration: BoxDecoration(
-              color: Colors.white,
+              color: const Color(0xFFF3F3F3),
               borderRadius: BorderRadius.circular(18),
-              border: Border.all(color: Colors.black45, width: 1.2),
+              border: Border.all(color: Colors.black54, width: 2),
+              boxShadow: const [
+                BoxShadow(
+                  color: Color(0x2A000000),
+                  offset: Offset(0, 2),
+                  blurRadius: 4,
+                ),
+              ],
             ),
-            child: Column(
+            child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  'เลขรายการสินค้า ${record.id}',
-                  style: const TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.w900,
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'เลขรายการสินค้า ${record.id}',
+                        style: const TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w900,
+                          color: Colors.black87,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      const SizedBox(height: 8),
+                      _TwoLine(
+                        label: 'ที่รับ',
+                        value: data?.pickup ?? 'กำลังโหลด...',
+                      ),
+                      const SizedBox(height: 4),
+                      _TwoLine(
+                        label: 'ที่ส่ง',
+                        value: data?.dropoff ?? 'กำลังโหลด...',
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        'จำนวนสินค้า ${record.amount ?? '-'} ชิ้น',
+                        style: const TextStyle(
+                          fontSize: 15,
+                          color: Colors.black87,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
                   ),
                 ),
-                const SizedBox(height: 8),
-                Text('ผู้ส่ง: ${data?.senderText ?? 'กำลังโหลด...'}'),
-                const SizedBox(height: 4),
-                Text('ผู้รับ: ${data?.receiverText ?? 'กำลังโหลด...'}'),
-                const SizedBox(height: 6),
-                Text('จุดรับ: ${data?.pickup ?? 'กำลังโหลด...'}'),
-                const SizedBox(height: 4),
-                Text('จุดส่ง: ${data?.dropoff ?? 'กำลังโหลด...'}'),
-                const SizedBox(height: 6),
-                Text('จำนวนสินค้า: ${record.amount} ชิ้น'),
-                const SizedBox(height: 6),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.end,
-                  children: const [
-                    Icon(Icons.chevron_right, color: Colors.black),
-                  ],
+                const SizedBox(width: 8),
+                const Icon(
+                  Icons.chevron_right,
+                  size: 28,
+                  color: Colors.black87,
                 ),
               ],
             ),
@@ -274,16 +309,70 @@ class _RiderJobCard extends StatelessWidget {
   }
 }
 
-class _CardData {
-  const _CardData({
-    required this.senderText,
-    required this.receiverText,
-    required this.pickup,
-    required this.dropoff,
+class _TwoLine extends StatelessWidget {
+  const _TwoLine({required this.label, required this.value});
+  final String label;
+  final String value;
+  @override
+  Widget build(BuildContext context) {
+    return RichText(
+      text: TextSpan(
+        text: '$label ',
+        style: const TextStyle(
+          fontSize: 15,
+          color: Colors.black87,
+          fontWeight: FontWeight.w700,
+          height: 1.2,
+        ),
+        children: [
+          TextSpan(
+            text: value,
+            style: const TextStyle(fontWeight: FontWeight.w400),
+          ),
+        ],
+      ),
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+    );
+  }
+}
+
+class _StrokeText extends StatelessWidget {
+  const _StrokeText(
+    this.text, {
+    required this.fillColor,
+    required this.strokeColor,
+    required this.strokeWidth,
+    required this.style,
   });
 
-  final String senderText;
-  final String receiverText;
+  final String text;
+  final Color fillColor;
+  final Color strokeColor;
+  final double strokeWidth;
+  final TextStyle style;
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      children: [
+        Text(
+          text,
+          style: style.copyWith(
+            foreground: Paint()
+              ..style = PaintingStyle.stroke
+              ..strokeWidth = strokeWidth
+              ..color = strokeColor,
+          ),
+        ),
+        Text(text, style: style.copyWith(color: fillColor)),
+      ],
+    );
+  }
+}
+
+class _CardData {
+  const _CardData({required this.pickup, required this.dropoff});
   final String pickup;
   final String dropoff;
 }
