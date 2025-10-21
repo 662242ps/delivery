@@ -52,11 +52,11 @@ class RiderFooterNavBar extends StatelessWidget {
 
   /// ✅ เพจเริ่มต้น (ใส่ userId ให้ทุกหน้า)
   static List<WidgetBuilder> _defaultPageBuilders(String userId) => [
-        (ctx) => JobsPage(userId: userId),
-        (ctx) => RiderHistoryPage(userId: userId),
-        (ctx) => RiderVehiclePage(userId: userId),
-        (ctx) => ProfileRiderPage(userId: userId),
-      ];
+    (ctx) => JobsPage(userId: userId),
+    (ctx) => RiderHistoryPage(userId: userId),
+    (ctx) => RiderVehiclesPage(userId: userId),
+    (ctx) => ProfileRiderPage(userId: userId),
+  ];
 
   String _iconPath(int base, bool active) =>
       'assets/Icons/${active ? base + 1 : base}.png';
