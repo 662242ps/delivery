@@ -7,13 +7,51 @@ class DeliveryRecord {
         data = snapshot.data();
 
   final QueryDocumentSnapshot<Map<String, dynamic>> snapshot;
+  /// doc.id ของเอกสาร delivery
   final String id;
   final Map<String, dynamic> data;
 
+  // ---------- STATUS ----------
   String? get statusRaw => data['status']?.toString();
   String get status => DeliveryStatus.normalize(statusRaw);
+
+  // ---------- CORE IDS ----------
+  /// deliveryid ที่เก็บในฟิลด์ของเอกสาร (บางระบบเป็น int, บางระบบเป็น string)
+  /// ใช้ตัวนี้เวลาอยากได้เป็น String แบบ normalize
+  String? get deliveryId {
+    final v = data['deliveryid'];
+    if (v == null) return null;
+    final s = v.toString().trim();
+    return s.isEmpty ? null : s;
+  }
+
+  /// ถ้าอยากลองใช้เป็นเลข (เช่นค้นหาใน assignment ที่เก็บเป็น int)
+  int? get deliveryIdAsInt {
+    final v = data['deliveryid'];
+    if (v is num) return v.toInt();
+    return int.tryParse(v?.toString() ?? '');
+  }
+
+  /// rider id (ลองหลายชื่อคีย์ที่พบบ่อย)
+  String? get riderId {
+    final candidates = [
+      data['riderid'],
+      data['userid_rider'],
+      data['riderId'],
+    ];
+    for (final c in candidates) {
+      final s = c?.toString().trim();
+      if (s != null && s.isNotEmpty && s != '0' && s.toLowerCase() != 'null') {
+        return s;
+      }
+    }
+    return null;
+  }
+
+  /// ผู้ส่ง/ผู้รับ
   String? get senderId => data['userid_sender']?.toString();
   String? get receiverId {
+    // รองรับทั้ง userid_receiver และ legacy receiverid
     final byField = data['userid_receiver'];
     if (byField != null && byField.toString().isNotEmpty) {
       return byField.toString();
@@ -22,13 +60,17 @@ class DeliveryRecord {
     return legacy?.toString();
   }
 
-  String? get riderId => data['riderid']?.toString();
+  /// ที่อยู่ผู้ส่ง/ผู้รับ (เป็น doc.id ไปดึงจาก collection address)
   String? get senderAddressId => data['addressid_sender']?.toString();
   String? get receiverAddressId => data['addressid_receiver']?.toString();
+
+  // ---------- CONTACT ----------
   String? get receiverPhone => data['phone_receiver']?.toString();
   String? get senderPhone => data['phone_sender']?.toString();
-  String? get receiverName => data['receiver_name']?.toString();
-  String? get senderName => data['sender_name']?.toString();
+  String? get receiverName  => data['receiver_name']?.toString();
+  String? get senderName    => data['sender_name']?.toString();
+
+  // ---------- OTHER FIELDS ----------
   String? get detail => data['detail']?.toString();
   String? get pictureStatus1 => data['picture_status1']?.toString();
 
@@ -44,13 +86,20 @@ class DeliveryRecord {
   DateTime? get createdAt => createdAtTs?.toDate();
   DateTime? get updatedAt => updatedAtTs?.toDate();
 
-  bool get isActive => DeliveryStatus.isActive(statusRaw);
-  bool get isCompleted => DeliveryStatus.isCompleted(statusRaw);
+  // ---------- DERIVED ----------
+  bool get isActive     => DeliveryStatus.isActive(statusRaw);
+  bool get isCompleted  => DeliveryStatus.isCompleted(statusRaw);
   bool get isMapRelated => DeliveryStatus.isMapRelated(statusRaw);
 }
 
+// =============== Lightweight view models ===============
 class UserSummary {
-  const UserSummary({required this.id, required this.name, required this.phone, this.pictureUrl});
+  const UserSummary({
+    required this.id,
+    required this.name,
+    required this.phone,
+    this.pictureUrl,
+  });
 
   final String id;
   final String name;

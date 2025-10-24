@@ -1,10 +1,14 @@
-// history_page.dart
+// rider_history_page.dart
 import 'dart:ui';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
+
+// โมเดล/ยูทิลของโปรเจกต์คุณ (มีอยู่แล้ว)
+import 'package:flutter_application_4/utils/delivery_models.dart';
+import 'package:flutter_application_4/utils/delivery_status.dart';
+import 'package:flutter_application_4/utils/delivery_lookup.dart';
+import 'package:flutter_application_4/page/user_delivery_detail.dart';
 import 'package:flutter_application_4/widgets/rider_footer.dart';
-// ถ้ามีหน้า detail ให้ uncomment บรรทัดล่างนี้
-// import 'package:flutter_application_4/page/delivery_detail_page.dart';
 
 class RiderHistoryPage extends StatefulWidget {
   final String userId;
@@ -17,19 +21,9 @@ class RiderHistoryPage extends StatefulWidget {
 class _RiderHistoryPageState extends State<RiderHistoryPage> {
   static const _brandRed = Color(0xFFE96356);
   final _db = FirebaseFirestore.instance;
+  final _lookup = DeliveryLookupCache();
 
-  /// สถานะที่จะแสดงในหน้าประวัติ
-  static const List<String> _doneStatuses = <String>[
-    'ส่งสินค้าสำเร็จ',
-    'ไรเดอร์นำส่งสินค้าแล้ว',
-    'จัดส่งสำเร็จ',
-    'ส่งสินค้าเสร็จสิ้น',
-    // ถ้าอยากให้โชว์งานที่ยังไม่จบด้วย ก็เพิ่มไว้ได้:
-    'รอไรเดอร์มารับสินค้า',
-    'กำลังไปรับสินค้า',
-  ];
-
-  // แคชชื่อ/เบอร์
+  // cache ชื่อ/เบอร์ของผู้ส่ง (อ่านจาก collection 'user')
   final Map<String, String> _nameCache = {};
   final Map<String, String> _phoneCache = {};
 
@@ -37,8 +31,7 @@ class _RiderHistoryPageState extends State<RiderHistoryPage> {
     if (userId.isEmpty) return '-';
     if (_nameCache.containsKey(userId)) return _nameCache[userId]!;
     final snap = await _db.collection('user').doc(userId).get();
-    final data = snap.data();
-    final name = (data?['name'] ?? '-').toString();
+    final name = (snap.data()?['name'] ?? '-').toString();
     _nameCache[userId] = name;
     return name;
   }
@@ -47,18 +40,49 @@ class _RiderHistoryPageState extends State<RiderHistoryPage> {
     if (userId.isEmpty) return '-';
     if (_phoneCache.containsKey(userId)) return _phoneCache[userId]!;
     final snap = await _db.collection('user').doc(userId).get();
-    final data = snap.data();
-    final phone = (data?['phone'] ?? '-').toString();
+    final phone = (snap.data()?['phone'] ?? '-').toString();
     _phoneCache[userId] = phone;
     return phone;
   }
 
-  /// ดึงงานทั้งหมดของไรเดอร์ แล้วไปกรอง/เรียงในแอป (เลี่ยงทำดัชนีเพิ่ม)
-  Stream<QuerySnapshot<Map<String, dynamic>>> _historyStream() {
+  // แปลง dynamic -> int ปลอดภัย (สำหรับ deliveryid, amount)
+  int _toInt(dynamic v) {
+    if (v is int) return v;
+    if (v is num) return v.toInt();
+    return int.tryParse(v?.toString() ?? '') ?? 0;
+  }
+
+  /// งานของไรเดอร์ (riderid = userId) ที่สถานะ "เสร็จแล้ว"
+  Stream<List<QueryDocumentSnapshot<Map<String, dynamic>>>> _completedStream() {
     return _db
         .collection('delivery')
         .where('riderid', isEqualTo: widget.userId)
-        .snapshots();
+        .snapshots()
+        .map((snap) {
+      final docs = snap.docs.where((doc) {
+        final st = DeliveryStatus.normalize(doc.data()['status']?.toString());
+        return DeliveryStatus.isCompleted(st); // เช่น 'ไรเดอร์นำส่งสินค้าแล้ว'
+      }).toList();
+
+      // เรียงตามหมายเลขงาน (deliveryid เป็น number) มาก -> น้อย
+      docs.sort((a, b) {
+        final ai = _toInt(a.data()['deliveryid']);
+        final bi = _toInt(b.data()['deliveryid']);
+        return bi.compareTo(ai);
+      });
+
+      return docs;
+    });
+  }
+
+  void _openDetail(QueryDocumentSnapshot<Map<String, dynamic>> doc) {
+    final record = DeliveryRecord(doc);
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => UserDeliveryDetailPage(record: record, lookup: _lookup),
+      ),
+    );
   }
 
   @override
@@ -66,12 +90,11 @@ class _RiderHistoryPageState extends State<RiderHistoryPage> {
     return Scaffold(
       body: Stack(
         children: [
+          // พื้นหลังภาพ
           Positioned.fill(
-            child: Image.asset(
-              'assets/images/พื้นหลังแอพ.png',
-              fit: BoxFit.cover,
-            ),
+            child: Image.asset('assets/images/พื้นหลังแอพ.png', fit: BoxFit.cover),
           ),
+          // เกรเดียนท์ทับให้อ่านง่าย
           Positioned.fill(
             child: Container(
               decoration: const BoxDecoration(
@@ -91,9 +114,7 @@ class _RiderHistoryPageState extends State<RiderHistoryPage> {
                 Container(
                   decoration: const BoxDecoration(
                     color: _brandRed,
-                    border: Border(
-                      bottom: BorderSide(color: Colors.black, width: 2),
-                    ),
+                    border: Border(bottom: BorderSide(color: Colors.black, width: 2)),
                   ),
                   padding: const EdgeInsets.symmetric(vertical: 10),
                   alignment: Alignment.center,
@@ -104,145 +125,100 @@ class _RiderHistoryPageState extends State<RiderHistoryPage> {
                       fontWeight: FontWeight.w900,
                       color: Colors.black,
                       shadows: [
-                        Shadow(
-                          blurRadius: 1.5,
-                          offset: Offset(0.8, 0.8),
-                          color: Colors.white,
-                        ),
+                        Shadow(blurRadius: 1.5, offset: Offset(0.8, 0.8), color: Colors.white),
                       ],
                     ),
                   ),
                 ),
 
-                // Content
+                // Panel รายการ
                 Expanded(
                   child: Padding(
-                    padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
-                    child: ClipRRect(
-                      borderRadius: BorderRadius.circular(22),
-                      child: BackdropFilter(
-                        filter: ImageFilter.blur(sigmaX: 8, sigmaY: 8),
-                        child: Container(
-                          decoration: BoxDecoration(
-                            color: Colors.white.withOpacity(0.75),
-                            borderRadius: BorderRadius.circular(22),
-                            border: Border.all(color: Colors.black, width: 1.8),
+                    // ขยับพาเนลลงจากขอบให้เหมือนภาพตัวอย่าง
+                    padding: const EdgeInsets.fromLTRB(12, 18, 12, 10),
+                    child: Stack(
+                      children: [
+                        // ริ้วแดงมุมขวา (ตกแต่ง)
+                        Positioned.fill(
+                          child: IgnorePointer(
+                            child: CustomPaint(painter: _DiagonalStripePainter()),
                           ),
-                          child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                            stream: _historyStream(),
-                            builder: (context, snap) {
-                              if (snap.connectionState ==
-                                  ConnectionState.waiting) {
-                                return const Center(
-                                  child: CircularProgressIndicator(),
-                                );
-                              }
-                              if (snap.hasError) {
-                                return Center(
-                                  child: Text('เกิดข้อผิดพลาด: ${snap.error}'),
-                                );
-                              }
+                        ),
 
-                              // กรองเฉพาะสถานะที่อยากแสดง
-                              final allDocs = snap.data?.docs ?? [];
-                              final filtered = allDocs.where((e) {
-                                final st = (e.data()['status'] ?? '')
-                                    .toString();
-                                return _doneStatuses.contains(st);
-                              }).toList();
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(20),
+                          child: BackdropFilter(
+                            filter: ImageFilter.blur(sigmaX: 8, sigmaY: 8),
+                            child: Container(
+                              decoration: BoxDecoration(
+                                color: const Color(0xFFF7F7F7).withOpacity(0.96),
+                                borderRadius: BorderRadius.circular(20),
+                                border: Border.all(color: Colors.black87, width: 2),
+                              ),
+                              child: StreamBuilder<
+                                  List<QueryDocumentSnapshot<Map<String, dynamic>>>>(
+                                stream: _completedStream(),
+                                builder: (context, snap) {
+                                  if (snap.connectionState == ConnectionState.waiting) {
+                                    return const Center(child: CircularProgressIndicator());
+                                  }
+                                  if (snap.hasError) {
+                                    return Center(child: Text('เกิดข้อผิดพลาด: ${snap.error}'));
+                                  }
 
-                              // เรียงใหม่ตาม updated_at (ใหม่ -> เก่า) ฝั่งแอป
-                              filtered.sort((a, b) {
-                                final aTs =
-                                    (a.data()['updated_at'] as Timestamp?)
-                                        ?.millisecondsSinceEpoch ??
-                                    0;
-                                final bTs =
-                                    (b.data()['updated_at'] as Timestamp?)
-                                        ?.millisecondsSinceEpoch ??
-                                    0;
-                                return bTs.compareTo(aTs);
-                              });
+                                  final docs = snap.data ?? const [];
+                                  if (docs.isEmpty) {
+                                    return const Center(child: Text('ยังไม่มีประวัติที่เสร็จแล้ว'));
+                                  }
 
-                              if (filtered.isEmpty) {
-                                return const Center(
-                                  child: Text('ยังไม่มีประวัติการส่งสินค้า'),
-                                );
-                              }
+                                  return ListView.separated(
+                                    padding: const EdgeInsets.fromLTRB(14, 14, 14, 18),
+                                    itemCount: docs.length,
+                                    separatorBuilder: (_, __) => const SizedBox(height: 14),
+                                    itemBuilder: (_, i) {
+                                      final doc = docs[i];
+                                      final d = doc.data();
 
-                              return ListView.separated(
-                                padding: const EdgeInsets.fromLTRB(
-                                  14,
-                                  12,
-                                  14,
-                                  18,
-                                ),
-                                itemCount: filtered.length,
-                                separatorBuilder: (_, __) =>
-                                    const SizedBox(height: 10),
-                                itemBuilder: (_, i) {
-                                  final doc = filtered[i];
-                                  final d = doc.data();
-                                  final deliveryId = (d['deliveryid'] ?? doc.id)
-                                      .toString();
-                                  final senderUserId =
-                                      (d['userid_sender'] ?? '').toString();
-                                  final amount = d['amount'] is int
-                                      ? d['amount'] as int
-                                      : int.tryParse('${d['amount']}') ?? 0;
-                                  final status = (d['status'] ?? '').toString();
+                                      final deliveryNum = _toInt(d['deliveryid']);
+                                      final senderUserId = (d['userid_sender'] ?? '').toString();
+                                      final amount = _toInt(d['amount']);
+                                      final statusText =
+                                          'สถานะ : ${DeliveryStatus.normalize(d['status']?.toString())}';
 
-                                  return FutureBuilder<List<String>>(
-                                    future: Future.wait([
-                                      _loadUserName(senderUserId),
-                                      _loadUserPhone(senderUserId),
-                                    ]),
-                                    builder: (context, userSnap) {
-                                      final senderName =
-                                          userSnap.data?.elementAtOrNull(0) ??
-                                          '...';
-                                      final senderPhone =
-                                          userSnap.data?.elementAtOrNull(1) ??
-                                          '...';
+                                      // โหลดชื่อ/เบอร์ผู้ส่งเพื่อโชว์
+                                      return FutureBuilder<List<String>>(
+                                        future: Future.wait([
+                                          _loadUserName(senderUserId),
+                                          _loadUserPhone(senderUserId),
+                                        ]),
+                                        builder: (context, uSnap) {
+                                          String senderName = '...';
+                                          String senderPhone = '...';
+                                          if (uSnap.hasData &&
+                                              uSnap.data != null &&
+                                              uSnap.data!.length >= 2) {
+                                            senderName = uSnap.data![0];
+                                            senderPhone = uSnap.data![1];
+                                          }
 
-                                      return _HistoryCard(
-                                        title: 'เลขรายการสินค้า $deliveryId',
-                                        sender:
-                                            'ผู้ส่ง  ชื่อ $senderName  |  เบอร์ $senderPhone',
-                                        qtyText: 'จำนวนสินค้า  $amount  ชิ้น',
-                                        statusText: 'สถานะ : $status',
-                                        onTap: () {
-                                          // ถ้ามีหน้า DeliveryDetailPage ให้ใช้โค้ดด้านล่าง
-                                          // Navigator.push(
-                                          //   context,
-                                          //   MaterialPageRoute(
-                                          //     builder: (_) => DeliveryDetailPage(
-                                          //       userId: widget.userId,
-                                          //       deliveryDocId: doc.id,
-                                          //     ),
-                                          //   ),
-                                          // );
-
-                                          // ชั่วคราว: ถ้ายังไม่มีหน้า detail
-                                          ScaffoldMessenger.of(
-                                            context,
-                                          ).showSnackBar(
-                                            SnackBar(
-                                              content: Text(
-                                                'เปิดรายละเอียดงาน: $deliveryId',
-                                              ),
-                                            ),
+                                          return _HistoryCard(
+                                            title: 'เลขรายการสินค้า $deliveryNum',
+                                            sender:
+                                                'ผู้ส่ง  ชื่อ $senderName  |  เบอร์ $senderPhone',
+                                            qtyText: 'จำนวนสินค้า  $amount  ชิ้น',
+                                            statusText: statusText,
+                                            onTap: () => _openDetail(doc),
                                           );
                                         },
                                       );
                                     },
                                   );
                                 },
-                              );
-                            },
+                              ),
+                            ),
                           ),
                         ),
-                      ),
+                      ],
                     ),
                   ),
                 ),
@@ -251,17 +227,13 @@ class _RiderHistoryPageState extends State<RiderHistoryPage> {
           ),
         ],
       ),
-
-      // Footer: แท็บประวัติ = index 1
-      bottomNavigationBar: RiderFooterNavBar(
-        currentIndex: 1,
-        userId: widget.userId,
-      ),
+      // Footer เมนูไรเดอร์ (ตั้ง index ให้ตรงเมนูของคุณ)
+      bottomNavigationBar: RiderFooterNavBar(currentIndex: 1, userId: widget.userId),
     );
   }
 }
 
-/* ---------- Card UI ---------- */
+/* ---------- การ์ดแต่ละแถว ---------- */
 class _HistoryCard extends StatelessWidget {
   const _HistoryCard({
     required this.title,
@@ -279,61 +251,118 @@ class _HistoryCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.fromLTRB(12, 10, 6, 10),
-      decoration: BoxDecoration(
-        color: const Color(0xFFF2F2F2).withOpacity(0.9),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: Colors.black54, width: 1.3),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  style: const TextStyle(
-                    fontWeight: FontWeight.w900,
-                    fontSize: 18,
+    return InkWell(
+      borderRadius: BorderRadius.circular(16),
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(14, 12, 12, 12),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: Colors.black54, width: 1.6),
+          boxShadow: const [
+            BoxShadow(color: Colors.black12, offset: Offset(2, 3), blurRadius: 5),
+          ],
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            // เนื้อหาด้านซ้าย
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w900),
                   ),
-                ),
-                const SizedBox(height: 6),
-                Text(
-                  sender,
-                  style: const TextStyle(fontSize: 14.5, height: 1.35),
-                ),
-                const SizedBox(height: 6),
-                Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        qtyText,
-                        style: const TextStyle(fontSize: 14.5, height: 1.35),
+                  const SizedBox(height: 6),
+                  Text(
+                    sender,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 14),
+                  ),
+                  const SizedBox(height: 6),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          qtyText,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontSize: 14),
+                        ),
                       ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        statusText,
-                        textAlign: TextAlign.right,
-                        style: const TextStyle(fontSize: 14.5, height: 1.35),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          statusText,
+                          textAlign: TextAlign.right,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontSize: 14),
+                        ),
                       ),
-                    ),
-                  ],
-                ),
-              ],
+                    ],
+                  ),
+                ],
+              ),
             ),
-          ),
-          IconButton(
-            onPressed: onTap,
-            icon: const Icon(Icons.chevron_right, size: 26),
-            splashRadius: 20,
-          ),
-        ],
+            const SizedBox(width: 10),
+
+            // 🔻 เปลี่ยนจากกล่องมีพื้นหลัง เป็นไอคอน/ปุ่มไอคอนล้วน ๆ (ไม่มีพื้นหลัง)
+            // ตัวเลือก A: ไอคอนล้วน (พึ่งพา InkWell ของทั้งการ์ดในการคลิก)
+            // const Icon(Icons.chevron_right, size: 22, color: Colors.black87),
+
+            // ตัวเลือก B: ปุ่มไอคอน (เพิ่ม hit area แต่ยังไม่มีพื้นหลัง)
+            IconButton(
+              onPressed: onTap,
+              icon: const Icon(Icons.chevron_right, size: 22, color: Colors.black87),
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
+              splashRadius: 22,
+              tooltip: 'ดูรายละเอียด',
+            ),
+          ],
+        ),
       ),
     );
   }
+}
+
+/* ---------- พื้นหลังริ้วแดงมุมขวา ---------- */
+class _DiagonalStripePainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = const Color(0xFFE96356).withOpacity(0.45)
+      ..style = PaintingStyle.fill;
+
+    final h = size.height;
+    final w = size.width;
+
+    Path stripe(Rect r) {
+      final p = Path();
+      p.moveTo(r.left, r.top);
+      p.lineTo(r.right, r.top - 16);
+      p.lineTo(r.right, r.bottom - 16);
+      p.lineTo(r.left, r.bottom);
+      p.close();
+      return p;
+    }
+
+    // วางริ้วไปทางขวา และโปร่ง ไม่บังตัวหนังสือ
+    final dx = w * 0.12;
+    final r1 = Rect.fromLTWH(w * 0.68, h * 0.20, dx, h * 0.55);
+    final r2 = Rect.fromLTWH(w * 0.82, h * 0.24, dx, h * 0.55);
+
+    canvas.drawPath(stripe(r1), paint);
+    canvas.drawPath(stripe(r2), paint);
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
