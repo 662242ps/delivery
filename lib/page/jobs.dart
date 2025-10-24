@@ -30,30 +30,62 @@ class _JobsPageState extends State<JobsPage> {
     _checkActiveDelivery();
   }
 
-  /// ✅ ดูเฉพาะ "งานของเรา" แล้วค่อยเช็คสถานะที่ต้องขึ้นแผนที่
+  /// ✅ พาไป "งานค้าง" โดยดูจาก delivery_assignment.accepted == true
+  ///    - เลี่ยง composite index: query เฉพาะ riderid แล้วกรอง accepted ในแอป
   Future<void> _checkActiveDelivery() async {
     try {
-      final mine = await _firestore
-          .collection('delivery')
-          .where('riderId', isEqualTo: widget.userId)
+      final qs = await _firestore
+          .collection('delivery_assignment')
+          .where('riderid', isEqualTo: widget.userId)
           .get();
 
-      for (final doc in mine.docs) {
-        final d = doc.data();
-        final status = DeliveryStatus.normalize(d['status']?.toString());
-        if (DeliveryStatus.isMapRelated(status) &&
-            status != DeliveryStatus.waitingForRider) {
-          if (!mounted) return;
-          Navigator.of(context).pushReplacement(
-            MaterialPageRoute(
-              builder: (_) => RiderActiveDeliveryMapPage(
-                userId: widget.userId,
-                deliveryId: doc.id,
-              ),
-            ),
-          );
-          return;
+      String? activeDeliveryId;
+
+      for (final doc in qs.docs) {
+        final data = doc.data();
+        final accepted = (data['accepted'] == true);
+        if (!accepted) continue;
+
+        // deliveryid อาจเป็น int หรือ string
+        final raw = data['deliveryid'];
+        final did = (raw is int) ? raw.toString() : (raw?.toString() ?? '');
+        if (did.isEmpty) continue;
+
+        activeDeliveryId = did;
+
+        // (ตัวเลือก) ตรวจสถานะใน delivery ให้ชัวร์ ถ้าอ่านได้
+        try {
+          final dSnap = await _firestore.collection('delivery').doc(did).get();
+          if (dSnap.exists) {
+            final status = DeliveryStatus.normalize(
+              dSnap.data()?['status']?.toString(),
+            );
+            // มีงานค้างเฉพาะช่วงกำลังทำงาน
+            if (status == DeliveryStatus.riderAccepted ||
+                status == DeliveryStatus.riderPickedUp) {
+              break; // ใช้ did นี้ได้เลย
+            } else if (status == DeliveryStatus.delivered) {
+              // ถ้า delivery ปิดแล้วแต่ accepted ยัง true (หลงเหลือ) ให้ข้าม
+              activeDeliveryId = null;
+            }
+          }
+        } catch (_) {
+          // ถ้าอ่านไม่ได้ก็ยังคงนำทางด้วย did ที่พบ (กรณีข้อมูลไม่สมบูรณ์)
+          break;
         }
+      }
+
+      if (activeDeliveryId != null && activeDeliveryId!.isNotEmpty) {
+        if (!mounted) return;
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(
+            builder: (_) => RiderActiveDeliveryMapPage(
+              userId: widget.userId,
+              deliveryId: activeDeliveryId!,
+            ),
+          ),
+        );
+        return;
       }
     } finally {
       if (mounted) setState(() => _checkingActive = false);

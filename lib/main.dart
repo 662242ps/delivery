@@ -53,7 +53,9 @@ class MyApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       title: 'Delivery App',
       theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: const Color.fromARGB(255, 252, 108, 108),
+        ),
         useMaterial3: true,
 
         // พื้นหลังทึบ ตัดแฟลชตอนเปลี่ยนหน้า

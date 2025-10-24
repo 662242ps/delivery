@@ -7,8 +7,7 @@ import 'package:flutter_application_4/utils/delivery_status.dart';
 // หน้าที่จะเรียกต่อ
 import 'package:flutter_application_4/page/rider_active_delivery_map.dart';
 import 'package:flutter_application_4/page/rider_capture_photo.dart';
-import 'package:flutter_application_4/page/jobs.dart';
-// ✅ เพิ่ม import หน้าแสดงรายละเอียดที่อยู่
+
 import 'package:flutter_application_4/page/address_detail.dart';
 
 class RiderJobDetailPage extends StatefulWidget {
@@ -46,97 +45,102 @@ class _RiderJobDetailPageState extends State<RiderJobDetailPage> {
     return maxId;
   }
 
-  /// ✅ รับงาน + สร้างแถวใน delivery_assignment
-  ///    ⛔ "ไม่" อัปเดต riderid หรือ status ใน delivery
+  Future<int?> _findActiveDeliveryIdForRider(String riderId) async {
+    try {
+      final qs = await _db
+          .collection('delivery_assignment')
+          .where('riderid', isEqualTo: riderId)
+          .where('accepted', isEqualTo: true)
+          .limit(1)
+          .get();
+      if (qs.docs.isEmpty) return null;
+      final d = qs.docs.first.data();
+      return (d['deliveryid'] as num?)?.toInt();
+    } on FirebaseException catch (e) {
+      // เผื่อยังไม่มี composite index
+      if (e.code == 'failed-precondition') {
+        final qs = await _db
+            .collection('delivery_assignment')
+            .where('riderid', isEqualTo: riderId)
+            .get();
+        for (final doc in qs.docs) {
+          final data = doc.data();
+          if (data['accepted'] == true) {
+            return (data['deliveryid'] as num?)?.toInt();
+          }
+        }
+        return null;
+      }
+      rethrow;
+    }
+  }
+
   Future<void> _acceptJobAndCreateAssignment() async {
     if (_busy) return;
     setState(() => _busy = true);
 
-    final dRef = _db.collection('delivery').doc(widget.deliveryId);
-
     try {
-      // 0) หาเลขสูงสุดของ delivery_assignment ก่อนเข้า transaction (กัน index)
+      // 0) ถ้ามีงานค้าง accepted=true อยู่แล้ว ห้ามรับเพิ่ม
+      final activeDid = await _findActiveDeliveryIdForRider(widget.userId);
+      if (activeDid != null) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('คุณมีงานที่กำลังทำอยู่อยู่แล้ว')),
+        );
+        Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) => RiderActiveDeliveryMapPage(
+              userId: widget.userId,
+              deliveryId: activeDid.toString(),
+            ),
+          ),
+        );
+        return;
+      }
+
+      final dRef = _db.collection('delivery').doc(widget.deliveryId);
+
+      // 1) หาเลขสูงสุดของ assignment ก่อน (เหมือนเดิม)
       final baseline = await _getMaxNumericDocId('delivery_assignment');
 
       await _db.runTransaction((tx) async {
-        // 1) อ่านงานส่งของ
         final dSnap = await tx.get(dRef);
         if (!dSnap.exists) throw Exception('ไม่พบนำสั่ง');
         final d = dSnap.data() as Map<String, dynamic>;
-
         final status = DeliveryStatus.normalize(d['status']?.toString());
         if (status != DeliveryStatus.waitingForRider) {
           throw Exception('งานนี้ไม่อยู่ในสถานะรอรับงานแล้ว');
         }
 
-        // 2) คำนวณ deliveryid (int) ตาม ER
         final int deliveryId =
             int.tryParse((d['deliveryid']?.toString() ?? widget.deliveryId)) ??
             int.parse(widget.deliveryId);
 
-        // 3) จองเลข assignmentid ต่อจากเลขสูงสุด (กันชนใน transaction)
         var assignId = baseline + 1;
         while (true) {
           final aRef = _db
               .collection('delivery_assignment')
               .doc(assignId.toString());
-
           final aSnap = await tx.get(aRef);
           if (!aSnap.exists) {
-            // 4) เขียนเอกสาร assignment ด้วย docId = assignId
             tx.set(aRef, {
-              'assignmentid': assignId, // PK วิ่ง 1,2,3…
-              'deliveryid': deliveryId, // FK ไปที่ delivery
-              'riderid': widget.userId, // ไรเดอร์ที่รับงาน
-              'accepted': true,
+              'assignmentid': assignId,
+              'deliveryid': deliveryId,
+              'riderid': widget.userId,
+              'accepted': true, // <— สร้างเป็น false ก่อน
               'picture_status3': null,
               'picture_status4': null,
             });
             break;
           }
-          assignId++; // ถ้าชนให้ไล่เลขถัดไป
+          assignId++;
         }
-
-        // ⛔ ไม่อัปเดต delivery.status ที่นี่ ปล่อยให้เปลี่ยนเมื่อถึงจุดรับจริง ๆ
-      });
-
-      if (!mounted) return;
-      // พาไปหน้าแผนที่งานที่กำลังทำ
-      Navigator.of(context).push(
-        MaterialPageRoute(
-          builder: (_) => RiderActiveDeliveryMapPage(
-            userId: widget.userId,
-            deliveryId: widget.deliveryId,
-          ),
-        ),
-      );
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text(e.toString())));
-      }
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
-  }
-
-  /// (ตัวเลือก) ล็อกงานไว้เฉยๆ (ไม่เปลี่ยนสถานะ, ไม่เขียน riderid)
-  Future<void> _acceptJobLockOnly() async {
-    if (_busy) return;
-    setState(() => _busy = true);
-    final ref = _db.collection('delivery').doc(widget.deliveryId);
-    try {
-      await _db.runTransaction((tx) async {
-        final snap = await tx.get(ref);
-        if (!snap.exists) throw Exception('ไม่พบนำสั่ง');
-        final d = snap.data() as Map<String, dynamic>;
-        final status = DeliveryStatus.normalize(d['status']?.toString());
-
-        if (status != DeliveryStatus.waitingForRider) {
-          throw Exception('งานนี้ไม่อยู่ในสถานะรอรับงานแล้ว');
-        }
-        // ⛔ ไม่อัปเดต riderid / status
+        // 3) อัปเดตใบงานให้เป็น riderAccepted + ผูก riderid คนที่รับ
+        // 3) อัปเดตใบงานให้เป็น riderAccepted + ผูก riderid คนที่รับ
+        tx.update(dRef, {
+          'status': DeliveryStatus.riderAccepted,
+          'riderid': widget.userId, // ไอดีไรเดอร์ในระบบของคุณ
+        });
       });
 
       if (!mounted) return;
@@ -160,17 +164,6 @@ class _RiderJobDetailPageState extends State<RiderJobDetailPage> {
   }
 
   void _goPickupMap() {
-    Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => RiderActiveDeliveryMapPage(
-          userId: widget.userId,
-          deliveryId: widget.deliveryId,
-        ),
-      ),
-    );
-  }
-
-  void _goDropoffMap() {
     Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => RiderActiveDeliveryMapPage(
