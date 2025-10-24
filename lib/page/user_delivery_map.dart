@@ -11,6 +11,13 @@ import 'package:flutter_application_4/widgets/user_footer.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 
+// ใช้ RTDB โปรเจกต์เดียวกับฝั่งไรเดอร์
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_database/firebase_database.dart';
+
+// ✅ ใช้เพื่อดึงพิกัด GPS ปัจจุบัน
+import 'package:geolocator/geolocator.dart';
+
 class UserDeliveryMapPage extends StatefulWidget {
   const UserDeliveryMapPage({super.key, required this.userId});
   final String userId;
@@ -27,15 +34,89 @@ class _UserDeliveryMapPageState extends State<UserDeliveryMapPage> {
   final _firestore = FirebaseFirestore.instance;
   final _lookup = DeliveryLookupCache();
 
-  // ฟิลเตอร์การแสดงผล
-  bool _showMyAddresses = true; // พิกัดคุณ (ที่อยู่ของฉัน)
-  bool _showReceiverAddresses = true; // พิกัดผู้รับ (งานที่ฉันเป็นผู้ส่ง)
-  bool _showSenderRiders =
-      true; // ไรเดอร์ที่ "กำลังส่ง" ให้ผู้รับ (งานที่ฉันเป็นผู้ส่ง)
-  bool _showReceiverRiders =
-      true; // ไรเดอร์ที่ "กำลังมารับ/ส่งให้ฉัน" (งานที่ฉันเป็นผู้รับ)
+  late final FirebaseDatabase _rtdb = FirebaseDatabase.instanceFor(
+    app: Firebase.app(),
+    databaseURL:
+        'https://delivery-test-61f4a-default-rtdb.asia-southeast1.firebasedatabase.app',
+  );
 
-  bool _hasCentered = false;
+  // แถบปุ่มด้านบน — เรา “ไม่ให้กด”
+  final bool _showMyAddresses = true;
+  final bool _showReceiverAddresses = true;
+  final bool _showSenderRiders = true;
+  final bool _showReceiverRiders = true;
+
+  // กล้อง/แผนที่
+  final _mapPadding = const EdgeInsets.all(60.0);
+
+  // ✅ ฟิตกล้องไป "พิกัดฉัน" ครั้งเดียว (ใช้ center แทน bounds)
+  bool _mapReady = false;
+  bool _didFitToMe = false;
+  LatLng? _pendingCenterForMe;
+
+  // ✅ พิกัดฉัน (GPS)
+  LatLng? _myGpsPoint;
+
+  static const _iconSend = 'assets/Icons/16.png'; // แดง
+  static const _iconRecv = 'assets/Icons/17.png'; // ดำ
+
+  @override
+  void initState() {
+    super.initState();
+    // เตรียมรูปให้โหลดไวขึ้น
+    Future.microtask(() async {
+      if (!mounted) return;
+      await precacheImage(const AssetImage(_iconSend), context);
+      await precacheImage(const AssetImage(_iconRecv), context);
+    });
+
+    // เริ่มดึงพิกัดฉันทันที
+    _initMyLocation();
+  }
+
+  // ---------- ดึงพิกัดฉัน & ฟิตครั้งเดียว ----------
+  Future<void> _initMyLocation() async {
+    try {
+      // last known (เร็ว) -> current (แม่น)
+      final last = await Geolocator.getLastKnownPosition();
+      if (last != null && mounted) {
+        _myGpsPoint = LatLng(last.latitude, last.longitude);
+        _fitToMeOnce(_myGpsPoint!);
+        setState(() {});
+      }
+
+      if (!await Geolocator.isLocationServiceEnabled()) return;
+      var perm = await Geolocator.checkPermission();
+      if (perm == LocationPermission.denied) {
+        perm = await Geolocator.requestPermission();
+      }
+      if (perm == LocationPermission.denied ||
+          perm == LocationPermission.deniedForever) {
+        return; // ไม่มีสิทธิ์ → fallback ไปพิกัด address
+      }
+
+      final pos = await Geolocator.getCurrentPosition(
+        desiredAccuracy: LocationAccuracy.high,
+      );
+      if (!mounted) return;
+      _myGpsPoint = LatLng(pos.latitude, pos.longitude);
+      _fitToMeOnce(_myGpsPoint!);
+      setState(() {});
+    } catch (_) {
+      // เงียบ ๆ แล้ว fallback ไป myAddresses
+    }
+  }
+
+  void _fitToMeOnce(LatLng p) {
+    if (_didFitToMe) return;
+    if (!_mapReady) {
+      _pendingCenterForMe = p;
+      return;
+    }
+    // ใช้ center + zoom ปลอดภัยแม้มีจุดเดียว
+    _mapController.move(p, 16); // ปรับ 15–17 ตามต้องการ
+    _didFitToMe = true;
+  }
 
   // ---------- Utilities ----------
   Future<Map<String, AddressSummary>> _loadAddresses(
@@ -43,8 +124,8 @@ class _UserDeliveryMapPageState extends State<UserDeliveryMapPage> {
   ) async {
     final result = <String, AddressSummary>{};
     for (final id in ids) {
-      final summary = await _lookup.getAddress(id);
-      if (summary != null) result[id] = summary;
+      final s = await _lookup.getAddress(id);
+      if (s != null) result[id] = s;
     }
     return result;
   }
@@ -58,34 +139,71 @@ class _UserDeliveryMapPageState extends State<UserDeliveryMapPage> {
     return out;
   }
 
-  // รวมสตรีมตำแหน่งไรเดอร์แบบเรียลไทม์ (จำกัด whereIn <= 10)
-  Stream<List<QuerySnapshot<Map<String, dynamic>>>> _riderLocationsStream(
-    Set<String> riderIds,
+  // ---------- Firestore: delivery_assignment (accepted only) ----------
+  Stream<List<QuerySnapshot<Map<String, dynamic>>>> _assignmentStream(
+    Set<String> deliveryIds,
   ) {
-    final parts = _chunk(riderIds, 10);
+    if (deliveryIds.isEmpty) return const Stream.empty();
+    final asInts = deliveryIds.map(int.tryParse).whereType<int>().toSet();
+
+    final parts = _chunk(asInts, 10);
     final streams = parts.map(
       (c) => _firestore
-          .collection('rider_location')
-          .where('riderid', whereIn: c)
+          .collection('delivery_assignment')
+          .where('deliveryid', whereIn: c)
+          .where('accepted', isEqualTo: true)
           .snapshots(),
     );
-    if (streams.isEmpty) return const Stream.empty();
     return StreamZip(streams.toList());
   }
 
-  void _centerIfNeeded(List<LatLng> points) {
-    if (_hasCentered || points.isEmpty) return;
-    _hasCentered = true;
-    final bounds = LatLngBounds.fromPoints(points);
-    Future.microtask(() {
-      if (!mounted) return;
-      _mapController.fitCamera(
-        CameraFit.bounds(bounds: bounds, padding: const EdgeInsets.all(60)),
+  /// ฟังตำแหน่งไรเดอร์ตาม deliveryId ที่มี assignment
+  /// จาก RTDB: delivery_status/{deliveryId} -> { lat, lng, ... }
+  Stream<Map<String, LatLng>> _riderPositionsByDeliveryIds(
+    Set<String> assignedDeliveryIds,
+  ) {
+    if (assignedDeliveryIds.isEmpty) return Stream.value(const {});
+    final controller = StreamController<Map<String, LatLng>>.broadcast();
+    final cache = <String, LatLng>{};
+    final subs = <StreamSubscription<DatabaseEvent>>[];
+
+    void push() => controller.add(Map<String, LatLng>.from(cache));
+
+    for (final did in assignedDeliveryIds) {
+      final ref = _rtdb.ref('delivery_status/$did');
+      final sub = ref.onValue.listen(
+        (event) {
+          final v = event.snapshot.value;
+          if (v is Map) {
+            final lat = v['lat'];
+            final lng = v['lng'];
+            if (lat is num && lng is num) {
+              cache[did] = LatLng(lat.toDouble(), lng.toDouble());
+            } else {
+              cache.remove(did);
+            }
+          } else {
+            cache.remove(did);
+          }
+          push();
+        },
+        onError: (_) {
+          cache.remove(did);
+          push();
+        },
       );
-    });
+      subs.add(sub);
+    }
+
+    controller.onCancel = () {
+      for (final s in subs) {
+        s.cancel();
+      }
+    };
+    return controller.stream;
   }
 
-  // ---------- Header ----------
+  // ---------- UI ----------
   Widget _pageHeader() {
     return Container(
       decoration: const BoxDecoration(
@@ -112,9 +230,9 @@ class _UserDeliveryMapPageState extends State<UserDeliveryMapPage> {
     );
   }
 
-  // ---------- Top filter bar ----------
+  // แถบปุ่มด้านบน (ปิดการกด) — คงพื้นหลังแถบ “แดง” ไว้ตามที่ต้องการ
   Widget _topFilterBar() {
-    const double gap = 10;
+    const gap = 10.0;
     return Container(
       padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
       decoration: BoxDecoration(
@@ -131,44 +249,42 @@ class _UserDeliveryMapPageState extends State<UserDeliveryMapPage> {
               color: Colors.redAccent,
               size: 20,
             ),
-            onTap: () => setState(() {
-              _showMyAddresses = !_showMyAddresses;
-              _hasCentered = false;
-            }),
+            enabled: false,
           ),
           const SizedBox(width: gap),
           _topButton(
             active: _showReceiverAddresses,
-            label: 'พิกัดผู้รับ',
+            label: 'พิกัดคนอื่น',
             icon: const Icon(
               Icons.location_on,
               color: Colors.black87,
               size: 20,
             ),
-            onTap: () => setState(() {
-              _showReceiverAddresses = !_showReceiverAddresses;
-              _hasCentered = false;
-            }),
+            enabled: false,
           ),
           const SizedBox(width: gap),
           _topButton(
             active: _showSenderRiders,
             label: 'ส่งสินค้า',
-            icon: const Icon(Icons.two_wheeler, size: 20, color: Colors.orange),
-            onTap: () => setState(() {
-              _showSenderRiders = !_showSenderRiders;
-              _hasCentered = false;
-            }),
+            icon: Image.asset(
+              _iconSend,
+              width: 20,
+              height: 20,
+              fit: BoxFit.contain,
+            ),
+            enabled: false,
           ),
           const SizedBox(width: gap),
           _topButton(
             active: _showReceiverRiders,
             label: 'รับสินค้า',
-            icon: const Icon(Icons.pedal_bike, size: 20, color: Colors.black87),
-            onTap: () => setState(() {
-              _showReceiverRiders = !_showReceiverRiders;
-              _hasCentered = false;
-            }),
+            icon: Image.asset(
+              _iconRecv,
+              width: 20,
+              height: 20,
+              fit: BoxFit.contain,
+            ),
+            enabled: false,
           ),
         ],
       ),
@@ -179,51 +295,52 @@ class _UserDeliveryMapPageState extends State<UserDeliveryMapPage> {
     required bool active,
     required String label,
     required Widget icon,
-    required VoidCallback onTap,
+    bool enabled = false,
+    VoidCallback? onTap,
   }) {
-    return Expanded(
-      child: GestureDetector(
-        onTap: onTap,
-        child: Container(
-          height: 40,
-          padding: const EdgeInsets.symmetric(horizontal: 12),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: _black, width: 2),
-            boxShadow: active
-                ? [
-                    BoxShadow(
-                      color: Colors.black.withOpacity(.18),
-                      blurRadius: 8,
-                      offset: const Offset(0, 3),
-                    ),
-                  ]
-                : null,
+    final content = Container(
+      height: 40,
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: _black, width: 2),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(.08),
+            blurRadius: 6,
+            offset: const Offset(0, 2),
           ),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              icon,
-              const SizedBox(width: 6),
-              Expanded(
-                child: FittedBox(
-                  fit: BoxFit.scaleDown,
-                  child: Text(
-                    label,
-                    maxLines: 1,
-                    style: TextStyle(
-                      fontSize: 13,
-                      color: _black,
-                      fontWeight: active ? FontWeight.w800 : FontWeight.w600,
-                      height: 1.1,
-                    ),
-                  ),
+        ],
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          icon,
+          const SizedBox(width: 6),
+          Expanded(
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              child: Text(
+                label,
+                maxLines: 1,
+                style: TextStyle(
+                  fontSize: 13,
+                  color: _black,
+                  fontWeight: active ? FontWeight.w800 : FontWeight.w600,
+                  height: 1.1,
                 ),
               ),
-            ],
+            ),
           ),
-        ),
+        ],
+      ),
+    );
+
+    return Expanded(
+      child: IgnorePointer(
+        ignoring: !enabled,
+        child: GestureDetector(onTap: enabled ? onTap : null, child: content),
       ),
     );
   }
@@ -232,7 +349,6 @@ class _UserDeliveryMapPageState extends State<UserDeliveryMapPage> {
   Marker _pinCircle({
     required LatLng point,
     required Color color,
-    required IconData icon,
     double size = 40,
   }) {
     return Marker(
@@ -280,113 +396,159 @@ class _UserDeliveryMapPageState extends State<UserDeliveryMapPage> {
     );
   }
 
+  Marker _imagePin({
+    required LatLng point,
+    required String assetPath,
+    double size = 56,
+    double bottomOffset = 2,
+  }) {
+    return Marker(
+      point: point,
+      width: size,
+      height: size + bottomOffset,
+      alignment: Alignment.bottomCenter,
+      child: Padding(
+        padding: EdgeInsets.only(bottom: bottomOffset),
+        child: Image.asset(assetPath, fit: BoxFit.contain),
+      ),
+    );
+  }
+
   // ---------- Map builder ----------
-  Widget _buildMapView({
+  Widget _buildMapViewByDelivery({
     required List<AddressSummary> myAddresses,
-    required List<DeliveryRecord> senderRecords,
-    required List<DeliveryRecord> receiverRecords,
+    required List<MapEntry<String, DeliveryRecord>> senderPairs,
+    required List<MapEntry<String, DeliveryRecord>> receiverPairs,
     required Map<String, AddressSummary> addressMap,
-    required Map<String, LatLng> riderMap,
+    required Map<String, LatLng> riderByDeliveryId,
   }) {
     final markers = <Marker>[];
-    final points = <LatLng>[];
+    final circles = <CircleMarker>[]; // <-- NEW: เก็บวงกลม
+    final myPoints = <LatLng>[]; // ใช้กำหนดกล้องเฉพาะหมุดแดง/พิกัดฉัน
 
-    // พิกัดคุณ (ที่อยู่ของฉัน)
-    if (_showMyAddresses) {
-      for (final addr in myAddresses) {
-        if (addr.lat != null && addr.lng != null) {
-          final p = LatLng(addr.lat!, addr.lng!);
-          points.add(p);
-          const iconSize = 40.0;
-          markers.addAll([
-            _pinCircle(
-              point: p,
-              color: Colors.redAccent,
-              icon: Icons.location_on,
-              size: iconSize,
+    // ---------- พิกัด GPS ของฉัน: วงกลมสีฟ้า ----------
+    if (_myGpsPoint != null) {
+      final p = _myGpsPoint!;
+      myPoints.add(p);
+
+      // วงโปร่งสีฟ้า (รัศมีเป็นพิกเซล ไม่ใช่เมตร)
+      circles.add(
+        CircleMarker(
+          point: p,
+          radius: 22, // ปรับขนาดได้
+          useRadiusInMeter: false,
+          color: Colors.lightBlueAccent.withOpacity(0.35),
+          borderColor: Colors.blueAccent,
+          borderStrokeWidth: 2,
+        ),
+      );
+
+      // จุดสีน้ำเงินตรงกลาง (ดูคล้ายตำแหน่งปัจจุบันในแผนที่ทั่วไป)
+      markers.add(
+        Marker(
+          point: p,
+          width: 14,
+          height: 14,
+          alignment: Alignment.center,
+          child: Container(
+            decoration: BoxDecoration(
+              color: Colors.blueAccent,
+              shape: BoxShape.circle,
+              border: Border.all(color: Colors.white, width: 2),
             ),
-            _pinLabel(point: p, text: 'คุณ', above: iconSize * 1.25),
+          ),
+        ),
+      );
+      // ถ้าต้องการป้าย "คุณ" ด้วย ให้ปลดคอมเมนต์บรรทัดด้านล่าง
+      // markers.add(_pinLabel(point: p, text: 'คุณ', above: 30));
+    }
+
+    // ---------- ที่อยู่ของเรา (หมุดวงกลมแดงเหมือนเดิม) ----------
+    if (_showMyAddresses) {
+      for (final a in myAddresses) {
+        if (a.lat != null && a.lng != null) {
+          final p = LatLng(a.lat!, a.lng!);
+          myPoints.add(p);
+          const s = 40.0;
+          markers.addAll([
+            _pinCircle(point: p, color: Colors.redAccent, size: s),
+            _pinLabel(point: p, text: 'คุณ', above: s * 1.25),
           ]);
         }
       }
     }
 
-    // พิกัดผู้รับ (เฉพาะงานที่เราเป็นผู้ส่ง)
+    // ---------- ปลายทางอีกฝั่ง (หมุดวงกลมดำเหมือนเดิม) ----------
     if (_showReceiverAddresses) {
-      for (final rec in senderRecords) {
-        final a = addressMap[rec.receiverAddressId ?? ''];
+      for (final e in senderPairs) {
+        final a = addressMap[e.value.receiverAddressId ?? ''];
         if (a?.lat != null && a?.lng != null) {
           final p = LatLng(a!.lat!, a.lng!);
-          points.add(p);
-          const iconSize = 40.0;
+          const s = 40.0;
           markers.addAll([
-            _pinCircle(
-              point: p,
-              color: Colors.black87,
-              icon: Icons.location_on,
-              size: iconSize,
-            ),
-            _pinLabel(point: p, text: 'ผู้รับ', above: iconSize * 1.25),
+            _pinCircle(point: p, color: Colors.black87, size: s),
+            _pinLabel(point: p, text: 'ผู้รับ', above: s * 1.25),
+          ]);
+        }
+      }
+      for (final e in receiverPairs) {
+        final a = addressMap[e.value.senderAddressId ?? ''];
+        if (a?.lat != null && a?.lng != null) {
+          final p = LatLng(a!.lat!, a.lng!);
+          const s = 40.0;
+          markers.addAll([
+            _pinCircle(point: p, color: Colors.black87, size: s),
+            _pinLabel(point: p, text: 'ผู้ส่ง', above: s * 1.25),
           ]);
         }
       }
     }
 
-    // ไรเดอร์กำลัง "ส่ง" (งานที่เราเป็นผู้ส่ง)
+    // ---------- ไรเดอร์ (ไอคอนเดิม) ----------
     if (_showSenderRiders) {
-      for (final rec in senderRecords) {
-        final id = rec.riderId;
-        if (id != null && riderMap.containsKey(id)) {
-          final p = riderMap[id]!;
-          points.add(p);
-          const iconSize = 40.0;
+      for (final e in senderPairs) {
+        final p = riderByDeliveryId[e.key];
+        if (p != null) {
+          const s = 56.0;
           markers.addAll([
-            _pinCircle(
-              point: p,
-              color: Colors.orange,
-              icon: Icons.delivery_dining,
-              size: iconSize,
-            ),
-            _pinLabel(point: p, text: 'ส่ง', above: iconSize * 1.25),
+            _imagePin(point: p, assetPath: _iconSend, size: s),
+            _pinLabel(point: p, text: 'ส่ง', above: s * .95),
           ]);
         }
       }
     }
-
-    // ไรเดอร์กำลัง "รับ/นำส่งให้ฉัน" (งานที่เราเป็นผู้รับ)
     if (_showReceiverRiders) {
-      for (final rec in receiverRecords) {
-        final id = rec.riderId;
-        if (id != null && riderMap.containsKey(id)) {
-          final p = riderMap[id]!;
-          points.add(p);
-          const iconSize = 40.0;
+      for (final e in receiverPairs) {
+        final p = riderByDeliveryId[e.key];
+        if (p != null) {
+          const s = 56.0;
           markers.addAll([
-            _pinCircle(
-              point: p,
-              color: _brandRed,
-              icon: Icons.pedal_bike,
-              size: iconSize,
-            ),
-            _pinLabel(point: p, text: 'รับ', above: iconSize * 1.25),
+            _imagePin(point: p, assetPath: _iconRecv, size: s),
+            _pinLabel(point: p, text: 'รับ', above: s * .95),
           ]);
         }
       }
     }
 
-    if (markers.isEmpty) {
-      return const Center(
-        child: Text(
-          'ยังไม่มีข้อมูลตำแหน่งสำหรับแสดงบนแผนที่',
-          textAlign: TextAlign.center,
+    if (myPoints.isEmpty) {
+      return Container(
+        margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        decoration: BoxDecoration(
+          border: Border.all(color: _black, width: 2),
+          borderRadius: BorderRadius.circular(28),
+        ),
+        alignment: Alignment.center,
+        child: const Padding(
+          padding: EdgeInsets.all(24),
+          child: Text('ยังไม่มีพิกัดของคุณที่จะแสดง'),
         ),
       );
     }
 
-    _centerIfNeeded(points);
-    final initialCenter = points.isNotEmpty
-        ? points.first
-        : const LatLng(13.7563, 100.5018);
+    final useBounds = myPoints.length > 1;
+    final firstMy = myPoints.first;
+
+    _fitToMeOnce(firstMy);
 
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
@@ -398,8 +560,19 @@ class _UserDeliveryMapPageState extends State<UserDeliveryMapPage> {
       child: FlutterMap(
         mapController: _mapController,
         options: MapOptions(
-          initialCenter: initialCenter,
-          initialZoom: 13,
+          initialCameraFit: useBounds
+              ? CameraFit.bounds(
+                  bounds: LatLngBounds.fromPoints(myPoints),
+                  padding: _mapPadding,
+                )
+              : null,
+          onMapReady: () {
+            _mapReady = true;
+            if (!_didFitToMe && _pendingCenterForMe != null) {
+              _mapController.move(_pendingCenterForMe!, 16);
+              _didFitToMe = true;
+            }
+          },
           interactionOptions: const InteractionOptions(
             flags: InteractiveFlag.all,
           ),
@@ -407,11 +580,17 @@ class _UserDeliveryMapPageState extends State<UserDeliveryMapPage> {
         children: [
           TileLayer(
             urlTemplate: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
-            subdomains: ['a', 'b', 'c'],
+            subdomains: const ['a', 'b', 'c'],
             userAgentPackageName: 'com.example.delivery',
             maxZoom: 19,
           ),
+
+          // <-- NEW: วงกลมสีฟ้า (และวงกลมอื่น ๆ ถ้ามี)
+          if (circles.isNotEmpty) CircleLayer(circles: circles),
+
+          // หมุดอื่น ๆ เหมือนเดิม
           MarkerLayer(rotate: false, markers: markers),
+
           const RichAttributionWidget(
             attributions: [
               TextSourceAttribution('© OpenStreetMap contributors'),
@@ -451,182 +630,138 @@ class _UserDeliveryMapPageState extends State<UserDeliveryMapPage> {
                 _pageHeader(),
                 _topFilterBar(),
                 Expanded(
-                  child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                    stream: _firestore
-                        .collection('user_address')
-                        .where('userid', isEqualTo: widget.userId)
-                        .snapshots(),
-                    builder: (context, userAddrSnap) {
-                      if (userAddrSnap.connectionState ==
-                          ConnectionState.waiting) {
-                        return const Center(child: CircularProgressIndicator());
-                      }
-                      if (userAddrSnap.hasError) {
-                        return Center(
-                          child: Text(
-                            'โหลดข้อมูลที่อยู่ล้มเหลว: ${userAddrSnap.error}',
-                          ),
-                        );
-                      }
-                      final myAddresses =
-                          userAddrSnap.data?.docs
-                              .map(AddressSummary.fromSnapshot)
-                              .toList() ??
-                          [];
+                  child:
+                      StreamBuilder<List<QuerySnapshot<Map<String, dynamic>>>>(
+                        stream: StreamZip([
+                          _firestore
+                              .collection('delivery')
+                              .where('userid_sender', isEqualTo: widget.userId)
+                              .snapshots(),
+                          _firestore
+                              .collection('delivery')
+                              .where(
+                                'userid_receiver',
+                                isEqualTo: widget.userId,
+                              )
+                              .snapshots(),
+                        ]),
+                        builder: (context, comboSnap) {
+                          final senderDocs = comboSnap.data != null
+                              ? comboSnap.data![0].docs
+                              : <QueryDocumentSnapshot<Map<String, dynamic>>>[];
+                          final receiverDocs = comboSnap.data != null
+                              ? comboSnap.data![1].docs
+                              : <QueryDocumentSnapshot<Map<String, dynamic>>>[];
 
-                      // งานที่เราเป็น "ผู้ส่ง"
-                      return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                        stream: _firestore
-                            .collection('delivery')
-                            .where('userid_sender', isEqualTo: widget.userId)
-                            .snapshots(),
-                        builder: (context, senderSnap) {
-                          if (senderSnap.connectionState ==
-                              ConnectionState.waiting) {
-                            return const Center(
-                              child: CircularProgressIndicator(),
-                            );
-                          }
-                          if (senderSnap.hasError) {
-                            return Center(
-                              child: Text(
-                                'โหลดรายการส่งล้มเหลว: ${senderSnap.error}',
-                              ),
-                            );
-                          }
-                          final senderRecords =
-                              senderSnap.data?.docs
-                                  .map((d) => DeliveryRecord(d))
-                                  .where((rec) => rec.isMapRelated)
-                                  .toList() ??
-                              [];
+                          final senderPairs = senderDocs
+                              .map((d) => MapEntry(d.id, DeliveryRecord(d)))
+                              .where((e) => e.value.isMapRelated)
+                              .toList();
+                          final receiverPairs = receiverDocs
+                              .map((d) => MapEntry(d.id, DeliveryRecord(d)))
+                              .where((e) => e.value.isMapRelated)
+                              .toList();
 
-                          // งานที่เราเป็น "ผู้รับ"
+                          // ที่อยู่ที่ต้องโหลด
+                          final myAddrIds = <String>{
+                            ...senderPairs
+                                .map((e) => e.value.senderAddressId ?? '')
+                                .where((id) => id.isNotEmpty),
+                            ...receiverPairs
+                                .map((e) => e.value.receiverAddressId ?? '')
+                                .where((id) => id.isNotEmpty),
+                          };
+                          final otherAddrIds = <String>{
+                            ...senderPairs
+                                .map((e) => e.value.receiverAddressId ?? '')
+                                .where((id) => id.isNotEmpty),
+                            ...receiverPairs
+                                .map((e) => e.value.senderAddressId ?? '')
+                                .where((id) => id.isNotEmpty),
+                          };
+                          final allAddrIds = {...myAddrIds, ...otherAddrIds};
+
+                          // ไอดีงานทั้งหมด
+                          final deliveryIds = <String>{
+                            ...senderPairs.map((e) => e.key),
+                            ...receiverPairs.map((e) => e.key),
+                          };
+
+                          // assignment ที่รับงานแล้ว
+                          final assStream = deliveryIds.isEmpty
+                              ? const Stream<
+                                  List<QuerySnapshot<Map<String, dynamic>>>
+                                >.empty()
+                              : _assignmentStream(deliveryIds);
+
                           return StreamBuilder<
-                            QuerySnapshot<Map<String, dynamic>>
+                            List<QuerySnapshot<Map<String, dynamic>>>
                           >(
-                            stream: _firestore
-                                .collection('delivery')
-                                .where(
-                                  'userid_receiver',
-                                  isEqualTo: widget.userId,
-                                )
-                                .snapshots(),
-                            builder: (context, receiverSnap) {
-                              if (receiverSnap.connectionState ==
-                                  ConnectionState.waiting) {
-                                return const Center(
-                                  child: CircularProgressIndicator(),
-                                );
+                            stream: assStream,
+                            builder: (context, assSnap) {
+                              final acceptedDeliveryIds = <String>{};
+                              for (final qs in assSnap.data ?? const []) {
+                                for (final doc in qs.docs) {
+                                  final did = doc.data()['deliveryid'];
+                                  if (did is int)
+                                    acceptedDeliveryIds.add('$did');
+                                  if (did is String)
+                                    acceptedDeliveryIds.add(did);
+                                }
                               }
-                              if (receiverSnap.hasError) {
-                                return Center(
-                                  child: Text(
-                                    'โหลดรายการรับล้มเหลว: ${receiverSnap.error}',
-                                  ),
-                                );
-                              }
-                              final receiverRecords =
-                                  receiverSnap.data?.docs
-                                      .map((d) => DeliveryRecord(d))
-                                      .where((rec) => rec.isMapRelated)
-                                      .toList() ??
-                                  [];
 
-                              // โหลดที่อยู่ปลายทางทั้งหมด (ของผู้รับสำหรับ senderRecords และของผู้ส่งสำหรับ receiverRecords)
-                              final addressIds = <String>{
-                                ...senderRecords
-                                    .map((rec) => rec.receiverAddressId ?? '')
-                                    .where((id) => id.isNotEmpty),
-                                ...receiverRecords
-                                    .map((rec) => rec.senderAddressId ?? '')
-                                    .where((id) => id.isNotEmpty),
-                              };
+                              // ตำแหน่งไรเดอร์แบบเรียลไทม์ (หลายงานพร้อมกัน)
+                              final riderStream = _riderPositionsByDeliveryIds(
+                                acceptedDeliveryIds,
+                              );
 
-                              return FutureBuilder<Map<String, AddressSummary>>(
-                                future: _loadAddresses(addressIds),
-                                builder: (context, addrSnapshot) {
-                                  if (addrSnapshot.connectionState ==
-                                      ConnectionState.waiting) {
-                                    return const Center(
-                                      child: CircularProgressIndicator(),
-                                    );
-                                  }
-                                  if (addrSnapshot.hasError) {
-                                    return Center(
-                                      child: Text(
-                                        'โหลดที่อยู่ปลายทางล้มเหลว: ${addrSnapshot.error}',
-                                      ),
-                                    );
-                                  }
-                                  final addressMap = addrSnapshot.data ?? {};
+                              return StreamBuilder<Map<String, LatLng>>(
+                                stream: riderStream,
+                                builder: (context, riderSnap) {
+                                  final riderByDeliveryId =
+                                      riderSnap.data ??
+                                      const <String, LatLng>{};
 
-                                  // รวบรวมไอดีไรเดอร์ที่เกี่ยวข้องทั้งหมด
-                                  final riderIds = <String>{
-                                    ...senderRecords
-                                        .map((rec) => rec.riderId ?? '')
-                                        .where((id) => id.isNotEmpty),
-                                    ...receiverRecords
-                                        .map((rec) => rec.riderId ?? '')
-                                        .where((id) => id.isNotEmpty),
-                                  };
-
-                                  // ถ้ายังไม่มีไรเดอร์ (ยังไม่ถูกจับคู่) ก็วาดเฉพาะหมุดที่อยู่
-                                  if (riderIds.isEmpty) {
-                                    return _buildMapView(
-                                      myAddresses: myAddresses,
-                                      senderRecords: senderRecords,
-                                      receiverRecords: receiverRecords,
-                                      addressMap: addressMap,
-                                      riderMap: const {},
+                                  if (allAddrIds.isEmpty &&
+                                      _myGpsPoint == null) {
+                                    // ไม่มีทั้งพิกัดคุณ & ที่อยู่ -> แสดงข้อความ
+                                    return _buildMapViewByDelivery(
+                                      myAddresses: const [],
+                                      senderPairs: senderPairs,
+                                      receiverPairs: receiverPairs,
+                                      addressMap: const {},
+                                      riderByDeliveryId: riderByDeliveryId,
                                     );
                                   }
 
-                                  // ตำแหน่งไรเดอร์แบบเรียลไทม์
-                                  return StreamBuilder<
-                                    List<QuerySnapshot<Map<String, dynamic>>>
+                                  return FutureBuilder<
+                                    Map<String, AddressSummary>
                                   >(
-                                    stream: _riderLocationsStream(riderIds),
-                                    builder: (context, riderSnaps) {
-                                      if (riderSnaps.connectionState ==
-                                          ConnectionState.waiting) {
-                                        return const Center(
-                                          child: CircularProgressIndicator(),
-                                        );
-                                      }
-                                      if (riderSnaps.hasError) {
-                                        return Center(
-                                          child: Text(
-                                            'โหลดตำแหน่งไรเดอร์ล้มเหลว: ${riderSnaps.error}',
+                                    future: allAddrIds.isEmpty
+                                        ? Future.value(
+                                            <String, AddressSummary>{},
+                                          )
+                                        : _loadAddresses(allAddrIds).timeout(
+                                            const Duration(seconds: 8),
+                                            onTimeout: () =>
+                                                <String, AddressSummary>{},
                                           ),
-                                        );
-                                      }
+                                    builder: (context, addrSnapshot) {
+                                      final addressMap =
+                                          addrSnapshot.data ??
+                                          <String, AddressSummary>{};
+                                      final myAddresses = myAddrIds
+                                          .map((id) => addressMap[id])
+                                          .where((a) => a != null)
+                                          .cast<AddressSummary>()
+                                          .toList();
 
-                                      final riderMap = <String, LatLng>{};
-                                      for (final qs
-                                          in riderSnaps.data ?? const []) {
-                                        for (final doc in qs.docs) {
-                                          final d = doc.data();
-                                          final lat = d['lat'];
-                                          final lng = d['lng'];
-                                          final riderId =
-                                              (d['riderid'] ?? doc.id)
-                                                  .toString();
-                                          if (lat is num && lng is num) {
-                                            riderMap[riderId] = LatLng(
-                                              lat.toDouble(),
-                                              lng.toDouble(),
-                                            );
-                                          }
-                                        }
-                                      }
-
-                                      return _buildMapView(
+                                      return _buildMapViewByDelivery(
                                         myAddresses: myAddresses,
-                                        senderRecords: senderRecords,
-                                        receiverRecords: receiverRecords,
+                                        senderPairs: senderPairs,
+                                        receiverPairs: receiverPairs,
                                         addressMap: addressMap,
-                                        riderMap: riderMap,
+                                        riderByDeliveryId: riderByDeliveryId,
                                       );
                                     },
                                   );
@@ -635,9 +770,7 @@ class _UserDeliveryMapPageState extends State<UserDeliveryMapPage> {
                             },
                           );
                         },
-                      );
-                    },
-                  ),
+                      ),
                 ),
               ],
             ),
@@ -649,7 +782,7 @@ class _UserDeliveryMapPageState extends State<UserDeliveryMapPage> {
   }
 }
 
-// ===== Painter: หมุดปลายแหลมชี้ตรงจุดพิกัด =====
+// ===== Painter: หมุดปลายแหลมชี้ตรงพิกัด =====
 class _TipAtCenterPinPainter extends CustomPainter {
   final Color fill;
   final Color stroke;
@@ -671,10 +804,10 @@ class _TipAtCenterPinPainter extends CustomPainter {
 
     final fillPaint = ui.Paint()
       ..color = fill
-      ..style = ui.PaintingStyle.fill;
+      ..style = PaintingStyle.fill;
     final strokePaint = ui.Paint()
       ..color = stroke
-      ..style = ui.PaintingStyle.stroke
+      ..style = PaintingStyle.stroke
       ..strokeWidth = 2;
 
     final tail = ui.Path()

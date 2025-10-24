@@ -28,8 +28,8 @@ class RiderActiveDeliveryMapPage extends StatefulWidget {
     required this.deliveryId,
   });
 
-  final String userId; // เลข user ในระบบของคุณ
-  final String deliveryId; // doc id ของ collection 'delivery' (string ของเลข)
+  final String userId;
+  final String deliveryId;
 
   @override
   State<RiderActiveDeliveryMapPage> createState() =>
@@ -40,7 +40,7 @@ class _RiderActiveDeliveryMapPageState
     extends State<RiderActiveDeliveryMapPage> {
   static const _brandRed = Color(0xFFE96356);
 
-  // --- arrive detection ---
+  // ระยะ trigger
   static const double kArriveRadiusMeters = 20.0;
   static const int kAutoCooldownSec = 8;
   bool _wasNearPickup = false;
@@ -54,12 +54,12 @@ class _RiderActiveDeliveryMapPageState
   final _mapController = MapController();
   final _lookup = DeliveryLookupCache();
 
-  // --- Map lifecycle ---
+  // Map lifecycle
   bool _mapReady = false;
   bool _centered = false;
   LatLng? _pendingCenter;
 
-  // --- Auth + RTDB ---
+  // Auth + RTDB
   final _auth = FirebaseAuth.instance;
   String? _uid;
   late final FirebaseDatabase _rtdb = FirebaseDatabase.instanceFor(
@@ -68,18 +68,15 @@ class _RiderActiveDeliveryMapPageState
         'https://delivery-test-61f4a-default-rtdb.asia-southeast1.firebasedatabase.app',
   );
 
-  // --- Location stream ---
+  // Location
   StreamSubscription<Position>? _positionSub;
   Position? _currentPosition;
 
-  // รีบิลด์เฉพาะส่วน marker/circle
+  // rebuild เฉพาะชั้น marker
   final ValueNotifier<LatLng?> _myPosVN = ValueNotifier<LatLng?>(null);
   final ValueNotifier<LatLng?> _targetVN = ValueNotifier<LatLng?>(null);
-  final ValueNotifier<double> _headingVN = ValueNotifier<double>(
-    0,
-  ); // องศา 0..360
+  final ValueNotifier<double> _headingVN = ValueNotifier<double>(0);
 
-  // สำหรับคำนวณมุมเมื่อ sensor ไม่ให้ heading
   LatLng? _prevPosForHeading;
 
   bool _processing = false;
@@ -87,16 +84,18 @@ class _RiderActiveDeliveryMapPageState
   AddressSummary? _senderAddress;
   AddressSummary? _receiverAddress;
 
-  // --- assignment ---
+  // assignment
   bool _assignmentReady = false;
   bool _hasMyAssignment = false;
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _assignSub;
   int? _deliveryIdInt;
   String? _assignmentDocId;
 
-  // ปรับให้องศารูปตรงกับทิศเหนือ (แก้ตามไฟล์ไอคอนของคุณ)
-  // ถ้าไอคอนชี้ไปทางขวา ให้ตั้งเป็น -90; ถ้าชี้ขึ้นเหนืออยู่แล้วให้เป็น 0
-  static const double _iconFacingOffsetDeg = -90;
+  // cache ว่ามี "รูปรับ" แล้วหรือยัง
+  bool? _hasPickupProofCached;
+
+  // ไอคอนรถหันเหนืออยู่แล้ว => 0
+  static const double _iconFacingOffsetDeg = 0;
 
   @override
   void initState() {
@@ -115,7 +114,7 @@ class _RiderActiveDeliveryMapPageState
     super.dispose();
   }
 
-  // ===== assignment listening / helpers =====
+  // ===== assignment =====
   void _startAssignmentListener() {
     final id = int.tryParse(widget.deliveryId);
     if (id == null) return;
@@ -169,6 +168,19 @@ class _RiderActiveDeliveryMapPageState
     }
   }
 
+  Future<bool> _hasPickupProof() async {
+    if (_hasPickupProofCached != null) return _hasPickupProofCached!;
+    final aId = await _getMyAssignmentDocId();
+    if (aId == null) return false;
+    final aSnap = await _firestore
+        .collection('delivery_assignment')
+        .doc(aId)
+        .get();
+    final v = (aSnap.data()?['picture_status3'] ?? '').toString();
+    _hasPickupProofCached = v.isNotEmpty;
+    return _hasPickupProofCached!;
+  }
+
   Future<void> _updateAssignmentPicture({
     required String fieldName,
     required String pictureUrl,
@@ -184,6 +196,27 @@ class _RiderActiveDeliveryMapPageState
     await _firestore.collection('delivery_assignment').doc(aId).update({
       fieldName: pictureUrl,
     });
+    if (fieldName == 'picture_status3' && pictureUrl.isNotEmpty) {
+      _hasPickupProofCached = true;
+    }
+  }
+
+  Future<void> _setAssignmentAccepted(bool v) async {
+    final aId = await _getMyAssignmentDocId();
+    if (aId == null) return;
+    await _firestore.collection('delivery_assignment').doc(aId).update({
+      'accepted': v,
+    });
+  }
+
+  Future<void> _syncAcceptedFlagForStatus(String status) async {
+    if (!_assignmentReady || !_hasMyAssignment) return;
+    if (status == DeliveryStatus.riderAccepted ||
+        status == DeliveryStatus.riderPickedUp) {
+      await _setAssignmentAccepted(true);
+    } else if (status == DeliveryStatus.delivered) {
+      await _setAssignmentAccepted(false);
+    }
   }
 
   // ===== Auth + live location (RTDB) =====
@@ -210,7 +243,13 @@ class _RiderActiveDeliveryMapPageState
     try {
       final position = await LocationUtils.ensureCurrentPosition();
       await _handlePosition(position);
-      _positionSub = LocationUtils.livePositionStream().listen(_handlePosition);
+
+      _positionSub = LocationUtils.livePositionStream(
+        distanceFilter: 0,
+        androidInterval: const Duration(milliseconds: 800),
+      ).listen(_handlePosition);
+
+      await _handlePosition(position);
     } on Exception catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(
@@ -219,7 +258,7 @@ class _RiderActiveDeliveryMapPageState
     }
   }
 
-  // คำนวณ bearing (องศา) จากจุด A -> B (0..360, 0 = เหนือ)
+  // bearing 0..360 (0 = เหนือ)
   double _bearingDeg(LatLng from, LatLng to) {
     final lat1 = from.latitude * math.pi / 180.0;
     final lon1 = from.longitude * math.pi / 180.0;
@@ -242,12 +281,11 @@ class _RiderActiveDeliveryMapPageState
     _myPosVN.value = me;
     _pendingCenter = me;
 
-    // อัปเดต heading
+    // heading
     double? newHeading;
     if (position.heading != null && position.heading >= 0) {
-      newHeading = position.heading; // มีค่าจาก sensor
+      newHeading = position.heading;
     } else if (_prevPosForHeading != null) {
-      // คำนวณจากพิกัดก่อนหน้า
       final moved =
           Geolocator.distanceBetween(
             _prevPosForHeading!.latitude,
@@ -256,9 +294,7 @@ class _RiderActiveDeliveryMapPageState
             me.longitude,
           ) >
           1.5;
-      if (moved) {
-        newHeading = _bearingDeg(_prevPosForHeading!, me);
-      }
+      if (moved) newHeading = _bearingDeg(_prevPosForHeading!, me);
     }
     _prevPosForHeading = me;
     if (newHeading != null) _headingVN.value = newHeading;
@@ -277,14 +313,12 @@ class _RiderActiveDeliveryMapPageState
       try {
         if (Platform.isAndroid || Platform.isIOS) riderLocRef.keepSynced(true);
       } catch (_) {}
-
       await riderLocRef.set({
         'riderid': uid,
         'lat': position.latitude,
         'lng': position.longitude,
         'updatedAt': ServerValue.timestamp,
       });
-
       try {
         riderLocRef.onDisconnect().remove();
       } catch (_) {}
@@ -328,7 +362,7 @@ class _RiderActiveDeliveryMapPageState
     }
   }
 
-  // ===== flow 20 เมตร + ถ่ายรูป + อัปโหลด + อัปเดต assignment =====
+  // ===== main flow: 20m -> ถ่ายรูป -> อัปเดตสถานะ =====
   Future<void> _maybeAutoProgress() async {
     if (_processing) return;
     if (_latestData == null || _currentPosition == null) return;
@@ -339,8 +373,9 @@ class _RiderActiveDeliveryMapPageState
 
     await _ensureAddresses(data);
 
-    // 1) pickup
-    if (status == DeliveryStatus.waitingForRider) {
+    // ---- เฟสรับของ (หลัง "รับงาน" แต่ยังไม่ถ่ายรูปรับ) ----
+    // เงื่อนไข: status == riderAccepted  (ไรเดอร์รับงาน)
+    if (status == DeliveryStatus.riderAccepted) {
       final s = _senderAddress;
       if (s?.lat == null || s?.lng == null) return;
 
@@ -357,15 +392,7 @@ class _RiderActiveDeliveryMapPageState
 
         _processing = true;
         try {
-          final dRef = _firestore.collection('delivery').doc(widget.deliveryId);
-
-          await dRef.update({'status': DeliveryStatus.riderAccepted});
-          await _rtdb.ref('delivery_status/${widget.deliveryId}').set({
-            'status': DeliveryStatus.riderAccepted,
-            'riderid': widget.userId,
-            'ts': ServerValue.timestamp,
-          });
-
+          // เปิดหน้า "ถ่ายรูปรับสินค้า"
           final file = await Navigator.of(context).push<File?>(
             MaterialPageRoute(
               builder: (_) => const RiderCapturePhotoPage(
@@ -386,30 +413,31 @@ class _RiderActiveDeliveryMapPageState
                 fieldName: 'picture_status3',
                 pictureUrl: url,
               );
+
+              // เปลี่ยนสถานะเป็น "รับสินค้าแล้วและกำลังไปส่ง"
+              final dRef = _firestore
+                  .collection('delivery')
+                  .doc(widget.deliveryId);
+              await dRef.update({'status': DeliveryStatus.riderPickedUp});
+              await _rtdb.ref('delivery_status/${widget.deliveryId}').set({
+                'status': DeliveryStatus.riderPickedUp,
+                'riderid': widget.userId,
+                'ts': ServerValue.timestamp,
+              });
+
+              await _setAssignmentAccepted(true);
             }
           }
         } finally {
           _processing = false;
         }
-        return;
       }
       if (!nearPickup) _wasNearPickup = false;
+      return;
     }
 
-    // 2) drop (ต้องมีรูป pickup ก่อน)
-    if (status == DeliveryStatus.riderAccepted) {
-      final aId = await _getMyAssignmentDocId();
-      bool hasPickupProof = false;
-      if (aId != null) {
-        final aSnap = await _firestore
-            .collection('delivery_assignment')
-            .doc(aId)
-            .get();
-        final v = (aSnap.data()?['picture_status3'] ?? '').toString();
-        hasPickupProof = v.isNotEmpty;
-      }
-      if (!hasPickupProof) return;
-
+    // ---- เฟสส่งของ (มีรูปรับแล้ว) ----
+    if (status == DeliveryStatus.riderPickedUp) {
       final r = _receiverAddress;
       if (r?.lat == null || r?.lng == null) return;
 
@@ -426,15 +454,7 @@ class _RiderActiveDeliveryMapPageState
 
         _processing = true;
         try {
-          final dRef = _firestore.collection('delivery').doc(widget.deliveryId);
-
-          await dRef.update({'status': DeliveryStatus.riderPickedUp});
-          await _rtdb.ref('delivery_status/${widget.deliveryId}').set({
-            'status': DeliveryStatus.riderPickedUp,
-            'riderid': widget.userId,
-            'ts': ServerValue.timestamp,
-          });
-
+          // เปิดหน้า "ถ่ายรูปส่งสินค้า"
           final file = await Navigator.of(context).push<File?>(
             MaterialPageRoute(
               builder: (_) => const RiderCapturePhotoPage(
@@ -457,6 +477,10 @@ class _RiderActiveDeliveryMapPageState
                 pictureUrl: url,
               );
 
+              // ปิดงานเป็น delivered
+              final dRef = _firestore
+                  .collection('delivery')
+                  .doc(widget.deliveryId);
               await dRef.update({'status': DeliveryStatus.delivered});
               await _rtdb.ref('delivery_status/${widget.deliveryId}').set({
                 'status': DeliveryStatus.delivered,
@@ -464,25 +488,27 @@ class _RiderActiveDeliveryMapPageState
                 'ts': ServerValue.timestamp,
               });
 
+              await _setAssignmentAccepted(false);
+
               final uid = _uid;
               if (uid != null) {
                 try {
                   await _rtdb.ref('rider_location/$uid').remove();
                 } catch (_) {}
               }
-            }
-          }
 
-          if (mounted) {
-            ScaffoldMessenger.of(
-              context,
-            ).showSnackBar(const SnackBar(content: Text('จัดส่งสำเร็จ ✅')));
-            Navigator.of(context).pushAndRemoveUntil(
-              MaterialPageRoute(
-                builder: (_) => JobsPage(userId: widget.userId),
-              ),
-              (r) => false,
-            );
+              if (mounted) {
+                ScaffoldMessenger.of(
+                  context,
+                ).showSnackBar(const SnackBar(content: Text('จัดส่งสำเร็จ ✅')));
+                Navigator.of(context).pushAndRemoveUntil(
+                  MaterialPageRoute(
+                    builder: (_) => JobsPage(userId: widget.userId),
+                  ),
+                  (r) => false,
+                );
+              }
+            }
           }
         } finally {
           _processing = false;
@@ -494,18 +520,18 @@ class _RiderActiveDeliveryMapPageState
 
   // ===== UI helpers =====
   String _headerTitle(String status) {
-    if (status == DeliveryStatus.waitingForRider) return 'ไปรับสินค้า';
-    if (status == DeliveryStatus.riderAccepted) return 'ไปส่งสินค้า';
-    return 'ติดตามงาน';
+    // ก่อนถ่ายรูปรับ => "ไปรับสินค้า", หลังถ่ายรูปรับ => "ไปส่งสินค้า"
+    if (status == DeliveryStatus.riderPickedUp) return 'ไปส่งสินค้า';
+    return 'ไปรับสินค้า';
   }
 
   LatLng? _computeTarget(String status) {
-    if (status == DeliveryStatus.waitingForRider) {
-      final s = _senderAddress;
-      if (s?.lat != null && s?.lng != null) return LatLng(s!.lat!, s.lng!);
-    } else if (status == DeliveryStatus.riderAccepted) {
+    if (status == DeliveryStatus.riderPickedUp) {
       final r = _receiverAddress;
       if (r?.lat != null && r?.lng != null) return LatLng(r!.lat!, r.lng!);
+    } else {
+      final s = _senderAddress;
+      if (s?.lat != null && s?.lng != null) return LatLng(s!.lat!, s.lng!);
     }
     return null;
   }
@@ -515,16 +541,16 @@ class _RiderActiveDeliveryMapPageState
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(const SnackBar(content: Text('แผนที่กำลังโหลด…')));
-      return;
+    } else {
+      final t = _targetVN.value ?? _computeTarget(status);
+      if (t == null) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('ยังไม่มีพิกัดเป้าหมาย')));
+      } else {
+        _mapController.move(t, 17);
+      }
     }
-    final t = _targetVN.value ?? _computeTarget(status);
-    if (t == null) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('ยังไม่มีพิกัดเป้าหมาย')));
-      return;
-    }
-    _mapController.move(t, 17);
   }
 
   Future<void> _centerToMe() async {
@@ -560,14 +586,16 @@ class _RiderActiveDeliveryMapPageState
             }
 
             final data = snapshot.data!.data() ?? {};
+            final status = DeliveryStatus.normalize(data['status']?.toString());
 
             final changed = !mapEquals(_latestData, data);
             _latestData = data;
             if (changed) {
-              _maybeAutoProgress(); // ไม่ setState เพื่อลดกระพริบ
+              _syncAcceptedFlagForStatus(status);
+              _maybeAutoProgress();
             }
 
-            final status = DeliveryStatus.normalize(data['status']?.toString());
+            // อัปเดต target
             final t = _computeTarget(status);
             final curr = _targetVN.value;
             if (t != null &&
@@ -581,9 +609,18 @@ class _RiderActiveDeliveryMapPageState
               return const Center(child: CircularProgressIndicator());
             }
             if (!_hasMyAssignment) {
-              return const Center(
-                child: Text('งานนี้ไม่อยู่ในความดูแลของคุณแล้ว'),
-              );
+              // ออกจากหน้าถ้าไม่ใช่งานเราแล้ว
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (mounted) {
+                  Navigator.of(context).pushAndRemoveUntil(
+                    MaterialPageRoute(
+                      builder: (_) => JobsPage(userId: widget.userId),
+                    ),
+                    (r) => false,
+                  );
+                }
+              });
+              return const SizedBox.shrink();
             }
 
             return Column(
@@ -677,12 +714,12 @@ class _RiderActiveDeliveryMapPageState
                                             (headingDeg +
                                                 _iconFacingOffsetDeg) *
                                             math.pi /
-                                            180.0;
+                                            180.0; // <-- fix
                                         markers.add(
                                           Marker(
                                             point: me,
-                                            width: 80,
-                                            height: 80,
+                                            width: 50,
+                                            height: 50,
                                             alignment: Alignment.center,
                                             child: Transform.rotate(
                                               angle: angleRad,
@@ -694,23 +731,29 @@ class _RiderActiveDeliveryMapPageState
                                           ),
                                         );
                                       }
-
                                       if (target != null) {
                                         markers.add(
                                           Marker(
                                             point: target,
-                                            width: 40,
-                                            height: 40,
-                                            child: const Icon(
-                                              Icons.location_on,
-                                              color: Colors.black,
-                                              size: 40,
+                                            width: 50,
+                                            height: 50,
+                                            alignment: Alignment.bottomCenter,
+                                            child: Transform.translate(
+                                              offset: const Offset(0, -40),
+                                              child: const Icon(
+                                                Icons.location_on,
+                                                color: Colors.black,
+                                                size: 50,
+                                              ),
                                             ),
                                           ),
                                         );
                                       }
 
-                                      return MarkerLayer(markers: markers);
+                                      return MarkerLayer(
+                                        rotate: false,
+                                        markers: markers,
+                                      );
                                     },
                                   );
                                 },

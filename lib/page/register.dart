@@ -816,7 +816,6 @@ class _RegisterState extends State<Register> {
           "password": pass,
           "role": "user",
           "picture": profileUrl ?? "",
-          "seq": int.parse(newId),
         }, SetOptions(merge: true));
 
         // 5) user_address ใช้ doc id = เลขเดียวกับ user
@@ -876,7 +875,6 @@ class _RegisterState extends State<Register> {
           "password": pass,
           "role": "rider",
           "picture": profileUrl ?? "",
-          "seq": int.parse(newId),
         }, SetOptions(merge: true));
 
         final File? vehicleFile =
