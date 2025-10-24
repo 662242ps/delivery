@@ -1,4 +1,3 @@
-// lib/page/rider_job_detail.dart
 import 'dart:ui';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
@@ -36,7 +35,93 @@ class _RiderJobDetailPageState extends State<RiderJobDetailPage> {
   Stream<DocumentSnapshot<Map<String, dynamic>>> get _stream =>
       _db.collection('delivery').doc(widget.deliveryId).snapshots();
 
-  // ============ ACTIONS ============
+  // ===== helper: หา docId ที่เป็นตัวเลขสูงสุดของคอลเลกชัน =====
+  Future<int> _getMaxNumericDocId(String collectionPath) async {
+    final snap = await _db.collection(collectionPath).get(); // ไม่ต้องมี index
+    var maxId = 0;
+    for (final d in snap.docs) {
+      final v = int.tryParse(d.id) ?? 0; // ข้ามเอกสารที่ id ไม่ใช่ตัวเลข
+      if (v > maxId) maxId = v;
+    }
+    return maxId;
+  }
+
+  /// ✅ รับงาน + สร้างแถวใน delivery_assignment
+  ///    ⛔ "ไม่" อัปเดต riderid หรือ status ใน delivery
+  Future<void> _acceptJobAndCreateAssignment() async {
+    if (_busy) return;
+    setState(() => _busy = true);
+
+    final dRef = _db.collection('delivery').doc(widget.deliveryId);
+
+    try {
+      // 0) หาเลขสูงสุดของ delivery_assignment ก่อนเข้า transaction (กัน index)
+      final baseline = await _getMaxNumericDocId('delivery_assignment');
+
+      await _db.runTransaction((tx) async {
+        // 1) อ่านงานส่งของ
+        final dSnap = await tx.get(dRef);
+        if (!dSnap.exists) throw Exception('ไม่พบนำสั่ง');
+        final d = dSnap.data() as Map<String, dynamic>;
+
+        final status = DeliveryStatus.normalize(d['status']?.toString());
+        if (status != DeliveryStatus.waitingForRider) {
+          throw Exception('งานนี้ไม่อยู่ในสถานะรอรับงานแล้ว');
+        }
+
+        // 2) คำนวณ deliveryid (int) ตาม ER
+        final int deliveryId =
+            int.tryParse((d['deliveryid']?.toString() ?? widget.deliveryId)) ??
+            int.parse(widget.deliveryId);
+
+        // 3) จองเลข assignmentid ต่อจากเลขสูงสุด (กันชนใน transaction)
+        var assignId = baseline + 1;
+        while (true) {
+          final aRef = _db
+              .collection('delivery_assignment')
+              .doc(assignId.toString());
+
+          final aSnap = await tx.get(aRef);
+          if (!aSnap.exists) {
+            // 4) เขียนเอกสาร assignment ด้วย docId = assignId
+            tx.set(aRef, {
+              'assignmentid': assignId, // PK วิ่ง 1,2,3…
+              'deliveryid': deliveryId, // FK ไปที่ delivery
+              'riderid': widget.userId, // ไรเดอร์ที่รับงาน
+              'accepted': true,
+              'picture_status3': null,
+              'picture_status4': null,
+            });
+            break;
+          }
+          assignId++; // ถ้าชนให้ไล่เลขถัดไป
+        }
+
+        // ⛔ ไม่อัปเดต delivery.status ที่นี่ ปล่อยให้เปลี่ยนเมื่อถึงจุดรับจริง ๆ
+      });
+
+      if (!mounted) return;
+      // พาไปหน้าแผนที่งานที่กำลังทำ
+      Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => RiderActiveDeliveryMapPage(
+            userId: widget.userId,
+            deliveryId: widget.deliveryId,
+          ),
+        ),
+      );
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(e.toString())));
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  /// (ตัวเลือก) ล็อกงานไว้เฉยๆ (ไม่เปลี่ยนสถานะ, ไม่เขียน riderid)
   Future<void> _acceptJobLockOnly() async {
     if (_busy) return;
     setState(() => _busy = true);
@@ -47,19 +132,11 @@ class _RiderJobDetailPageState extends State<RiderJobDetailPage> {
         if (!snap.exists) throw Exception('ไม่พบนำสั่ง');
         final d = snap.data() as Map<String, dynamic>;
         final status = DeliveryStatus.normalize(d['status']?.toString());
-        final riderId = (d['riderid'] as String?)?.trim();
 
         if (status != DeliveryStatus.waitingForRider) {
           throw Exception('งานนี้ไม่อยู่ในสถานะรอรับงานแล้ว');
         }
-        if (riderId != null && riderId.isNotEmpty && riderId != widget.userId) {
-          throw Exception('งานนี้ถูกจองโดยไรเดอร์คนอื่นแล้ว');
-        }
-        // ล็อกงานให้เรา แต่ยังคงสถานะ waitingForRider
-        tx.update(ref, {
-          'riderid': widget.userId,
-          'updated_at': FieldValue.serverTimestamp(),
-        });
+        // ⛔ ไม่อัปเดต riderid / status
       });
 
       if (!mounted) return;
@@ -139,7 +216,12 @@ class _RiderJobDetailPageState extends State<RiderJobDetailPage> {
               final d = snap.data!.data()!;
               final status = DeliveryStatus.normalize(d['status']?.toString());
               final riderId = (d['riderid'] as String?)?.trim();
-              final isMine = riderId == widget.userId;
+
+              // ✅ ไม่พึ่ง riderid ใน delivery; ให้ถือว่า "เป็นของเรา"
+              final bool isMineLike =
+                  riderId == null ||
+                  riderId.isEmpty ||
+                  riderId == widget.userId;
 
               String? label;
               VoidCallback? onPressed;
@@ -147,14 +229,15 @@ class _RiderJobDetailPageState extends State<RiderJobDetailPage> {
               if (status == DeliveryStatus.waitingForRider &&
                   (riderId == null || riderId.isEmpty)) {
                 label = 'รับงานนี้';
-                onPressed = _busy ? null : _acceptJobLockOnly;
-              } else if (status == DeliveryStatus.waitingForRider && isMine) {
+                onPressed = _busy ? null : _acceptJobAndCreateAssignment;
+              } else if (status == DeliveryStatus.waitingForRider &&
+                  isMineLike) {
                 label = 'ไปรับสินค้า';
                 onPressed = _goPickupMap;
-              } else if (status == DeliveryStatus.riderAccepted && isMine) {
+              } else if (status == DeliveryStatus.riderAccepted && isMineLike) {
                 label = 'ถ่ายภาพรับสินค้า';
                 onPressed = _goCapturePickup;
-              } else if (status == DeliveryStatus.riderPickedUp && isMine) {
+              } else if (status == DeliveryStatus.riderPickedUp && isMineLike) {
                 label = 'ถ่ายภาพส่งสินค้า';
                 onPressed = _goCaptureDropoff;
               } else {
@@ -228,13 +311,6 @@ class _RiderJobDetailPageState extends State<RiderJobDetailPage> {
                 }
 
                 final d = snap.data!.data()!;
-                final status = DeliveryStatus.normalize(
-                  d['status']?.toString(),
-                );
-                final amount = d['amount'];
-                final detail = (d['detail']?.toString() ?? '').trim();
-                final pictureUrl = (d['picture_status1']?.toString() ?? '')
-                    .trim(); // ✅ รูปสินค้า
 
                 return Column(
                   children: [
@@ -277,193 +353,7 @@ class _RiderJobDetailPageState extends State<RiderJobDetailPage> {
                     Expanded(
                       child: Padding(
                         padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-                        child: ClipRRect(
-                          borderRadius: BorderRadius.circular(24),
-                          child: BackdropFilter(
-                            filter: ImageFilter.blur(sigmaX: 8, sigmaY: 8),
-                            child: Container(
-                              decoration: BoxDecoration(
-                                color: Colors.white.withOpacity(0.88),
-                                borderRadius: BorderRadius.circular(24),
-                                border: Border.all(
-                                  color: Colors.black54,
-                                  width: 1.6,
-                                ),
-                              ),
-                              child: FutureBuilder<_DetailData>(
-                                future: _loadDetail(d),
-                                builder: (context, info) {
-                                  final dd = info.data;
-
-                                  // ชื่อ/เบอร์/ที่อยู่สำหรับส่งต่อไปหน้า AddressDetail
-                                  final senderName =
-                                      dd?.senderName ?? d['sender_name'] ?? '-';
-                                  final senderPhone =
-                                      dd?.senderPhone ??
-                                      d['phone_sender'] ??
-                                      '-';
-                                  final pickupAddr = dd?.pickup ?? '-';
-
-                                  final receiverName =
-                                      dd?.receiverName ??
-                                      d['receiver_name'] ??
-                                      '-';
-                                  final receiverPhone =
-                                      dd?.receiverPhone ??
-                                      d['phone_receiver'] ??
-                                      '-';
-                                  final dropoffAddr = dd?.dropoff ?? '-';
-
-                                  return CustomScrollView(
-                                    slivers: [
-                                      SliverPadding(
-                                        padding: const EdgeInsets.fromLTRB(
-                                          18,
-                                          18,
-                                          18,
-                                          20,
-                                        ),
-                                        sliver: SliverList(
-                                          delegate: SliverChildListDelegate.fixed([
-                                            _OutlineBox(
-                                              child: Text(
-                                                'สถานะสินค้า : $status',
-                                                style: const TextStyle(
-                                                  fontSize: 18,
-                                                  fontWeight: FontWeight.w700,
-                                                ),
-                                              ),
-                                            ),
-                                            const SizedBox(height: 14),
-
-                                            // ===== การ์ดผู้ส่ง (กดดูรายละเอียดที่อยู่) =====
-                                            _CardWithArrow(
-                                              title: 'ที่อยู่ของผู้ส่ง',
-                                              lines: [
-                                                'ชื่อ $senderName | เบอร์ $senderPhone',
-                                                pickupAddr,
-                                              ],
-                                              onTap: () {
-                                                Navigator.push(
-                                                  context,
-                                                  MaterialPageRoute(
-                                                    builder: (_) =>
-                                                        AddressDetailPage(
-                                                          name: senderName,
-                                                          phone: senderPhone,
-                                                          fullAddress:
-                                                              pickupAddr,
-                                                          lat: null,
-                                                          lng: null,
-                                                          addressDocId:
-                                                              d['addressid_sender']
-                                                                  ?.toString(),
-                                                        ),
-                                                  ),
-                                                );
-                                              },
-                                            ),
-                                            const SizedBox(height: 14),
-
-                                            // ===== การ์ดผู้รับ (กดดูรายละเอียดที่อยู่) =====
-                                            _CardWithArrow(
-                                              title: 'ที่อยู่ของผู้รับ',
-                                              lines: [
-                                                'ชื่อ $receiverName | เบอร์ $receiverPhone',
-                                                dropoffAddr,
-                                              ],
-                                              onTap: () {
-                                                Navigator.push(
-                                                  context,
-                                                  MaterialPageRoute(
-                                                    builder: (_) =>
-                                                        AddressDetailPage(
-                                                          name: receiverName,
-                                                          phone: receiverPhone,
-                                                          fullAddress:
-                                                              dropoffAddr,
-                                                          lat: null,
-                                                          lng: null,
-                                                          addressDocId:
-                                                              d['addressid_receiver']
-                                                                  ?.toString(),
-                                                        ),
-                                                  ),
-                                                );
-                                              },
-                                            ),
-                                            const SizedBox(height: 14),
-
-                                            _OutlineBox(
-                                              child: Row(
-                                                children: [
-                                                  Expanded(
-                                                    child: Text(
-                                                      'จำนวนสินค้า : ${amount ?? '-'}',
-                                                      style: const TextStyle(
-                                                        fontSize: 16,
-                                                      ),
-                                                    ),
-                                                  ),
-                                                  const Text(
-                                                    'ชิ้น',
-                                                    style: TextStyle(
-                                                      fontSize: 16,
-                                                      fontWeight:
-                                                          FontWeight.w700,
-                                                    ),
-                                                  ),
-                                                ],
-                                              ),
-                                            ),
-                                            const SizedBox(height: 14),
-
-                                            const _OutlineLabel(
-                                              'รายละเอียดสินค้า',
-                                            ),
-                                            const SizedBox(height: 8),
-                                            _OutlineBox(
-                                              height: 96,
-                                              child: Align(
-                                                alignment: Alignment.topLeft,
-                                                child: Text(
-                                                  detail.isEmpty
-                                                      ? 'รายละเอียดสินค้า'
-                                                      : detail,
-                                                  style: const TextStyle(
-                                                    fontSize: 14,
-                                                  ),
-                                                ),
-                                              ),
-                                            ),
-
-                                            const SizedBox(height: 14),
-
-                                            // ✅ รูปสินค้า (picture_status1)
-                                            const _OutlineLabel('รูปสินค้า'),
-                                            const SizedBox(height: 8),
-                                            _OutlineBox(
-                                              child: AspectRatio(
-                                                aspectRatio: 4 / 3,
-                                                child: _PhotoBox(
-                                                  url: pictureUrl,
-                                                ),
-                                              ),
-                                            ),
-
-                                            const SizedBox(
-                                              height: 120,
-                                            ), // กันชนเหนือปุ่มล่าง
-                                          ]),
-                                        ),
-                                      ),
-                                    ],
-                                  );
-                                },
-                              ),
-                            ),
-                          ),
-                        ),
+                        child: _DetailCard(d: d, lookup: widget.lookup),
                       ),
                     ),
                   ],
@@ -475,18 +365,20 @@ class _RiderJobDetailPageState extends State<RiderJobDetailPage> {
       ),
     );
   }
+}
 
-  Future<_DetailData> _loadDetail(Map<String, dynamic> d) async {
-    final sender = await widget.lookup.getUser(d['userid_sender']?.toString());
-    final receiver = await widget.lookup.getUser(
-      d['userid_receiver']?.toString(),
-    );
-    final sAddr = await widget.lookup.getAddress(
-      d['addressid_sender']?.toString(),
-    );
-    final rAddr = await widget.lookup.getAddress(
-      d['addressid_receiver']?.toString(),
-    );
+// ===== UI helpers (เดิม) =====
+
+class _DetailCard extends StatelessWidget {
+  const _DetailCard({required this.d, required this.lookup});
+  final Map<String, dynamic> d;
+  final DeliveryLookupCache lookup;
+
+  Future<_DetailData> _loadDetail() async {
+    final sender = await lookup.getUser(d['userid_sender']?.toString());
+    final receiver = await lookup.getUser(d['userid_receiver']?.toString());
+    final sAddr = await lookup.getAddress(d['addressid_sender']?.toString());
+    final rAddr = await lookup.getAddress(d['addressid_receiver']?.toString());
 
     return _DetailData(
       senderName: (sender?.name ?? d['sender_name'] ?? '-').toString(),
@@ -497,9 +389,167 @@ class _RiderJobDetailPageState extends State<RiderJobDetailPage> {
       dropoff: rAddr?.address ?? '-',
     );
   }
-}
 
-// ===== UI helpers =====
+  @override
+  Widget build(BuildContext context) {
+    final status = DeliveryStatus.normalize(d['status']?.toString());
+    final amount = d['amount'];
+    final detail = (d['detail']?.toString() ?? '').trim();
+    final pictureUrl = (d['picture_status1']?.toString() ?? '').trim();
+
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(24),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 8, sigmaY: 8),
+        child: Container(
+          decoration: BoxDecoration(
+            color: Colors.white.withOpacity(0.88),
+            borderRadius: BorderRadius.circular(24),
+            border: Border.all(color: Colors.black54, width: 1.6),
+          ),
+          child: FutureBuilder<_DetailData>(
+            future: _loadDetail(),
+            builder: (context, info) {
+              final dd = info.data;
+
+              final senderName = dd?.senderName ?? d['sender_name'] ?? '-';
+              final senderPhone = dd?.senderPhone ?? d['phone_sender'] ?? '-';
+              final pickupAddr = dd?.pickup ?? '-';
+
+              final receiverName =
+                  dd?.receiverName ?? d['receiver_name'] ?? '-';
+              final receiverPhone =
+                  dd?.receiverPhone ?? d['phone_receiver'] ?? '-';
+              final dropoffAddr = dd?.dropoff ?? '-';
+
+              return CustomScrollView(
+                slivers: [
+                  SliverPadding(
+                    padding: const EdgeInsets.fromLTRB(18, 18, 18, 20),
+                    sliver: SliverList(
+                      delegate: SliverChildListDelegate.fixed([
+                        _OutlineBox(
+                          child: Text(
+                            'สถานะสินค้า : $status',
+                            style: const TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 14),
+
+                        // ผู้ส่ง
+                        _CardWithArrow(
+                          title: 'ที่อยู่ของผู้ส่ง',
+                          lines: [
+                            'ชื่อ $senderName | เบอร์ $senderPhone',
+                            pickupAddr,
+                          ],
+                          onTap: () {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) => AddressDetailPage(
+                                  name: senderName.toString(),
+                                  phone: senderPhone.toString(),
+                                  fullAddress: pickupAddr.toString(),
+                                  lat: null,
+                                  lng: null,
+                                  addressDocId: d['addressid_sender']
+                                      ?.toString(),
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+                        const SizedBox(height: 14),
+
+                        // ผู้รับ
+                        _CardWithArrow(
+                          title: 'ที่อยู่ของผู้รับ',
+                          lines: [
+                            'ชื่อ $receiverName | เบอร์ $receiverPhone',
+                            dropoffAddr,
+                          ],
+                          onTap: () {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) => AddressDetailPage(
+                                  name: receiverName.toString(),
+                                  phone: receiverPhone.toString(),
+                                  fullAddress: dropoffAddr.toString(),
+                                  lat: null,
+                                  lng: null,
+                                  addressDocId: d['addressid_receiver']
+                                      ?.toString(),
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+                        const SizedBox(height: 14),
+
+                        _OutlineBox(
+                          child: Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  'จำนวนสินค้า : ${amount ?? '-'}',
+                                  style: const TextStyle(fontSize: 16),
+                                ),
+                              ),
+                              const Text(
+                                'ชิ้น',
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 14),
+
+                        const _OutlineLabel('รายละเอียดสินค้า'),
+                        const SizedBox(height: 8),
+                        _OutlineBox(
+                          height: 96,
+                          child: Align(
+                            alignment: Alignment.topLeft,
+                            child: Text(
+                              detail.isEmpty ? 'รายละเอียดสินค้า' : detail,
+                              style: const TextStyle(fontSize: 14),
+                            ),
+                          ),
+                        ),
+
+                        const SizedBox(height: 14),
+
+                        // รูปสินค้า
+                        const _OutlineLabel('รูปสินค้า'),
+                        const SizedBox(height: 8),
+                        _OutlineBox(
+                          child: AspectRatio(
+                            aspectRatio: 4 / 3,
+                            child: _PhotoBox(url: pictureUrl),
+                          ),
+                        ),
+
+                        const SizedBox(height: 120),
+                      ]),
+                    ),
+                  ),
+                ],
+              );
+            },
+          ),
+        ),
+      ),
+    );
+  }
+}
 
 class _StrokeText extends StatelessWidget {
   const _StrokeText(
@@ -563,7 +613,6 @@ class _OutlineLabel extends StatelessWidget {
   }
 }
 
-// ✅ เพิ่ม onTap & trailingChevron
 class _CardWithArrow extends StatelessWidget {
   const _CardWithArrow({
     required this.title,

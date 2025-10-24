@@ -61,6 +61,20 @@ class _AddAddressPageState extends State<AddAddressPage> {
     setState(() => _pin = null);
   }
 
+  // หาเลข docId สูงสุด "ทั้งคอลเลกชัน user_address" แล้วคืนค่า (ไม่มีการใช้ FieldPath)
+  Future<int> _getGlobalLastNo() async {
+    final fs = FirebaseFirestore.instance;
+    final col = fs.collection('user_address');
+
+    final snap = await col.get(); // ดึงเอกสารทั้งหมด (เหมาะกับปริมาณไม่เยอะ)
+    var maxId = 0;
+    for (final d in snap.docs) {
+      final v = int.tryParse(d.id) ?? 0; // ข้ามตัวที่ id ไม่ใช่ตัวเลข
+      if (v > maxId) maxId = v;
+    }
+    return maxId;
+  }
+
   Future<void> _submit() async {
     FocusScope.of(context).unfocus();
     if (!_formKey.currentState!.validate()) {
@@ -75,12 +89,35 @@ class _AddAddressPageState extends State<AddAddressPage> {
       ).showSnackBar(const SnackBar(content: Text('กรุณาปักหมุดที่อยู่')));
       return;
     }
+
     try {
-      await FirebaseFirestore.instance.collection('user_address').add({
-        'userid': widget.userId,
-        'address': _fullAddress,
-        'lat': _pin!.latitude,
-        'lng': _pin!.longitude,
+      final fs = FirebaseFirestore.instance;
+      final col = fs.collection('user_address');
+
+      // 1) หาเลขสูงสุดในคอลเลกชัน แล้วกำหนดเลขถัดไป
+      final last = await _getGlobalLastNo();
+
+      // 2) กันชนกันด้วยทรานแซกชัน: จองเลขถัดไป; ถ้าชนให้ขยับต่อ
+      await fs.runTransaction((tx) async {
+        var candidate = last + 1;
+        while (true) {
+          final docRef = col.doc(
+            candidate.toString(),
+          ); // docId = "1","2","3",...
+          final docSnap = await tx.get(docRef);
+
+          if (!docSnap.exists) {
+            tx.set(docRef, {
+              'userid': widget.userId,
+              'address': _fullAddress,
+              'lat': _pin!.latitude,
+              'lng': _pin!.longitude,
+            });
+            break;
+          } else {
+            candidate++; // ถ้าเลขนี้ถูกจองแล้ว ขยับต่อไป
+          }
+        }
       });
 
       if (!mounted) return;
