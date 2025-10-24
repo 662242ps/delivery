@@ -1,8 +1,10 @@
+import 'dart:math';
+
 import 'package:flutter/material.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter_application_4/utils/delivery_lookup.dart';
 import 'package:flutter_application_4/utils/delivery_models.dart';
 import 'package:flutter_application_4/page/address_detail.dart';
-// ถ้ามีหน้าโปรไฟล์ไรเดอร์อยู่แล้ว ปลดคอมเมนต์ตัว import ด้านล่าง
 import 'package:flutter_application_4/page/profile_rider.dart';
 
 class UserDeliveryDetailPage extends StatefulWidget {
@@ -17,7 +19,7 @@ class UserDeliveryDetailPage extends StatefulWidget {
 
 class _UserDeliveryDetailPageState extends State<UserDeliveryDetailPage> {
   static const _brandRed = Color(0xFFE96356);
-  static const double _photoLabelHeight = 20; // ให้ป้ายชื่อรูปสูงเท่ากัน
+  static const double _photoLabelHeight = 20;
 
   late final Future<_DeliveryDetailBundle> _detailFuture;
   DeliveryLookupCache get _lookup => widget.lookup ?? DeliveryLookupCache();
@@ -28,24 +30,94 @@ class _UserDeliveryDetailPageState extends State<UserDeliveryDetailPage> {
     _detailFuture = _loadDetail();
   }
 
+  // ====== Assignment helper (หา rider + รูปรับ/ส่ง จาก deliveryId) ======
+  Future<_Assignment?> _findAssignmentByDeliveryId(dynamic deliveryId) async {
+    const candidates = ['delivery_assignment', 'delivery_assighment'];
+
+    Future<_Assignment?> _from(QuerySnapshot<Map<String, dynamic>> q) async {
+      if (q.docs.isEmpty) return null;
+      final accepted = q.docs.where((d) => d.data()['accepted'] == true).toList();
+      final chosen = accepted.isNotEmpty ? accepted.first : q.docs.first;
+      final m = chosen.data();
+
+      String? riderId =
+          (m['riderid'] ?? m['userid_rider'] ?? m['riderId'])?.toString();
+      if (riderId != null) {
+        final v = riderId.trim().toLowerCase();
+        if (v.isEmpty || v == '0' || v == 'null') riderId = null;
+      }
+
+      return _Assignment(
+        riderId: riderId,
+        pictureStatus3: (m['picture_status3']?.toString().trim().isEmpty ?? true)
+            ? null
+            : m['picture_status3'].toString(),
+        pictureStatus4: (m['picture_status4']?.toString().trim().isEmpty ?? true)
+            ? null
+            : m['picture_status4'].toString(),
+        accepted: m['accepted'] == true,
+      );
+    }
+
+    for (final colName in candidates) {
+      final col = FirebaseFirestore.instance.collection(colName);
+
+      // ลองเทียบแบบ int ก่อน
+      final asInt = (deliveryId is int) ? deliveryId : int.tryParse('$deliveryId');
+      if (asInt != null) {
+        final q = await col.where('deliveryid', isEqualTo: asInt).limit(1).get();
+        final a = await _from(q);
+        if (a != null) return a;
+      }
+
+      // แล้วลองแบบ string
+      final q2 =
+          await col.where('deliveryid', isEqualTo: deliveryId.toString()).limit(1).get();
+      final a2 = await _from(q2);
+      if (a2 != null) return a2;
+    }
+
+    return null;
+  }
+
   Future<_DeliveryDetailBundle> _loadDetail() async {
-    final senderFuture = _lookup.getUser(widget.record.senderId);
-    final receiverFuture = _lookup.getUser(widget.record.receiverId);
-    final riderFuture = _lookup.getUser(widget.record.riderId);
-    final senderAddrFuture = _lookup.getAddress(widget.record.senderAddressId);
-    final receiverAddrFuture = _lookup.getAddress(
-      widget.record.receiverAddressId,
-    );
+    final r = widget.record;
+
+    // 1) หา assignment จาก deliveryId ใน record
+    final assignment = await _findAssignmentByDeliveryId(r.deliveryIdAsInt);
+
+    // 2) riderId: ถ้าใน assignment มี ให้ใช้ค่านั้น override ของเดิม
+    String? riderId = assignment?.riderId ?? r.riderId;
+
+    // 3) ยิง parallel: users + addresses
+   
+    log(r.deliveryIdAsInt as num);
+    final futSender = _lookup.getUser(r.senderId);
+    final futReceiver = _lookup.getUser(r.receiverId);
+    final futRider = _lookup.getUser(riderId);
+    final futSenderAddr = _lookup.getAddress(r.senderAddressId);
+    final futReceiverAddr = _lookup.getAddress(r.receiverAddressId);
 
     final results = await Future.wait([
-      senderFuture,
-      receiverFuture,
-      riderFuture,
-      senderAddrFuture,
-      receiverAddrFuture,
+      futSender,       // 0
+      futReceiver,     // 1
+      futRider,        // 2
+      futSenderAddr,   // 3
+      futReceiverAddr, // 4
     ]);
 
     return _DeliveryDetailBundle(
+      // ค่าจาก record โดยตรง
+      status: r.status,
+      amount: r.amount,
+      detail: r.detail,
+      pictureStatus1: r.pictureStatus1,
+
+      // รูปจาก assignment (ถ้ามี)
+      pictureStatus3: assignment?.pictureStatus3,
+      pictureStatus4: assignment?.pictureStatus4,
+
+      // ข้อมูลบุคคล/ที่อยู่
       sender: results[0] as UserSummary?,
       receiver: results[1] as UserSummary?,
       rider: results[2] as UserSummary?,
@@ -69,34 +141,20 @@ class _UserDeliveryDetailPageState extends State<UserDeliveryDetailPage> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text(
-                'รายละเอียดไรเดอร์',
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900),
-              ),
+              const Text('รายละเอียดไรเดอร์',
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900)),
               const SizedBox(height: 12),
-              Row(
-                children: [
-                  const Icon(Icons.person, size: 20),
-                  const SizedBox(width: 10),
-                  const Text(
-                    'ชื่อ : ',
-                    style: TextStyle(fontWeight: FontWeight.w700),
-                  ),
-                  Expanded(child: Text(rider.name)),
-                ],
-              ),
+              Row(children: [
+                const Icon(Icons.person, size: 20), const SizedBox(width: 10),
+                const Text('ชื่อ : ', style: TextStyle(fontWeight: FontWeight.w700)),
+                Expanded(child: Text(rider.name)),
+              ]),
               const SizedBox(height: 8),
-              Row(
-                children: [
-                  const Icon(Icons.phone, size: 20),
-                  const SizedBox(width: 10),
-                  const Text(
-                    'เบอร์ : ',
-                    style: TextStyle(fontWeight: FontWeight.w700),
-                  ),
-                  Expanded(child: Text(rider.phone ?? '-')),
-                ],
-              ),
+              Row(children: [
+                const Icon(Icons.phone, size: 20), const SizedBox(width: 10),
+                const Text('เบอร์ : ', style: TextStyle(fontWeight: FontWeight.w700)),
+                Expanded(child: Text(rider.phone ?? '-')),
+              ]),
               const SizedBox(height: 16),
               SizedBox(
                 width: double.infinity,
@@ -104,20 +162,14 @@ class _UserDeliveryDetailPageState extends State<UserDeliveryDetailPage> {
                   style: FilledButton.styleFrom(
                     backgroundColor: _brandRed,
                     foregroundColor: Colors.black,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
-                    ),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                   ),
                   onPressed: () {
                     Navigator.pop(context);
                     Navigator.push(
                       context,
                       MaterialPageRoute(
-                        // ✅ ส่งด้วยชื่อพารามิเตอร์ที่ถูกต้อง และซ่อนปุ่ม/ฟุตเตอร์
-                        builder: (_) => ProfileRiderPage(
-                          userId: rider.id,
-                          hideChrome: true,
-                        ),
+                        builder: (_) => ProfileRiderPage(userId: rider.id, hideChrome: true),
                       ),
                     );
                   },
@@ -133,23 +185,17 @@ class _UserDeliveryDetailPageState extends State<UserDeliveryDetailPage> {
 
   @override
   Widget build(BuildContext context) {
-    final record = widget.record;
-
     return Scaffold(
       body: Stack(
         children: [
           Positioned.fill(
-            child: Image.asset(
-              'assets/images/พื้นหลังแอพ.png',
-              fit: BoxFit.cover,
-            ),
+            child: Image.asset('assets/images/พื้นหลังแอพ.png', fit: BoxFit.cover),
           ),
           Positioned.fill(
             child: Container(
               decoration: const BoxDecoration(
                 gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
+                  begin: Alignment.topCenter, end: Alignment.bottomCenter,
                   colors: [Colors.transparent, Colors.black26],
                 ),
               ),
@@ -158,18 +204,13 @@ class _UserDeliveryDetailPageState extends State<UserDeliveryDetailPage> {
           SafeArea(
             child: Column(
               children: [
-                // ===== Top Bar =====
+                // Top bar
                 Container(
                   decoration: const BoxDecoration(
                     color: _brandRed,
-                    border: Border(
-                      bottom: BorderSide(color: Colors.black, width: 2),
-                    ),
+                    border: Border(bottom: BorderSide(color: Colors.black, width: 2)),
                   ),
-                  padding: const EdgeInsets.symmetric(
-                    vertical: 10,
-                    horizontal: 6,
-                  ),
+                  padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 6),
                   child: Row(
                     children: [
                       IconButton(
@@ -181,15 +222,9 @@ class _UserDeliveryDetailPageState extends State<UserDeliveryDetailPage> {
                           'รายละเอียดสินค้า',
                           textAlign: TextAlign.center,
                           style: TextStyle(
-                            fontSize: 24,
-                            fontWeight: FontWeight.w900,
-                            color: Colors.black,
+                            fontSize: 24, fontWeight: FontWeight.w900, color: Colors.black,
                             shadows: [
-                              Shadow(
-                                blurRadius: 3,
-                                offset: Offset(1.2, 1.2),
-                                color: Colors.white,
-                              ),
+                              Shadow(blurRadius: 3, offset: Offset(1.2, 1.2), color: Colors.white),
                               Shadow(blurRadius: 1.5, offset: Offset(0.8, 0.8)),
                             ],
                           ),
@@ -200,7 +235,7 @@ class _UserDeliveryDetailPageState extends State<UserDeliveryDetailPage> {
                   ),
                 ),
 
-                // ===== Content =====
+                // Content
                 Expanded(
                   child: FutureBuilder<_DeliveryDetailBundle>(
                     future: _detailFuture,
@@ -210,22 +245,16 @@ class _UserDeliveryDetailPageState extends State<UserDeliveryDetailPage> {
                       }
                       if (snapshot.hasError) {
                         return const Center(
-                          child: Text(
-                            'ไม่สามารถโหลดรายละเอียดได้',
-                            style: TextStyle(fontSize: 13),
-                          ),
+                          child: Text('ไม่สามารถโหลดรายละเอียดได้', style: TextStyle(fontSize: 13)),
                         );
                       }
 
                       final b = snapshot.data ?? const _DeliveryDetailBundle();
 
                       final photoSlots = <_PhotoSlot>[
-                        _PhotoSlot(
-                          label: 'รูปสินค้า',
-                          url: record.pictureStatus1,
-                        ),
-                        const _PhotoSlot(label: 'รูปรับสินค้า'),
-                        const _PhotoSlot(label: 'รูปส่งสินค้าแล้ว'),
+                        _PhotoSlot(label: 'รูปสินค้า', url: b.pictureStatus1),
+                        _PhotoSlot(label: 'รูปรับสินค้า', url: b.pictureStatus3),
+                        _PhotoSlot(label: 'รูปส่งสินค้าแล้ว', url: b.pictureStatus4),
                       ];
 
                       return SingleChildScrollView(
@@ -235,26 +264,17 @@ class _UserDeliveryDetailPageState extends State<UserDeliveryDetailPage> {
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              _StatusTile(
-                                statusText: 'สถานะสินค้า : ${record.status}',
-                              ),
+                              _StatusTile(statusText: 'สถานะสินค้า : ${b.status ?? '-'}'),
                               const SizedBox(height: 10),
 
-                              // === ผู้ส่ง ===
+                              // ผู้ส่ง
                               _SectionCard(
                                 title: 'ที่อยู่ของผู้ส่ง',
                                 trailingChevron: true,
                                 onTap: () {
-                                  final name =
-                                      b.sender?.name ??
-                                      record.senderName ??
-                                      '-';
-                                  final phone =
-                                      b.sender?.phone ??
-                                      record.senderPhone ??
-                                      '-';
-                                  final address =
-                                      b.senderAddress?.address ?? '-';
+                                  final name = b.sender?.name ?? '-';
+                                  final phone = b.sender?.phone ?? '-';
+                                  final address = b.senderAddress?.address ?? '-';
                                   Navigator.push(
                                     context,
                                     MaterialPageRoute(
@@ -264,40 +284,27 @@ class _UserDeliveryDetailPageState extends State<UserDeliveryDetailPage> {
                                         fullAddress: address,
                                         lat: null,
                                         lng: null,
-                                        addressDocId: record.senderAddressId,
+                                        addressDocId: widget.record.senderAddressId,
                                       ),
                                     ),
                                   );
                                 },
                                 child: _AddressLines(
-                                  name:
-                                      b.sender?.name ??
-                                      record.senderName ??
-                                      '-',
-                                  phone:
-                                      b.sender?.phone ??
-                                      record.senderPhone ??
-                                      '-',
+                                  name: b.sender?.name ?? '-',
+                                  phone: b.sender?.phone ?? '-',
                                   address: b.senderAddress?.address,
                                 ),
                               ),
                               const SizedBox(height: 10),
 
-                              // === ผู้รับ ===
+                              // ผู้รับ
                               _SectionCard(
-                                title: 'ที่อยู่ของผู้รับ',
+                                title: 'ที่อยู่าของผู้รับ',
                                 trailingChevron: true,
                                 onTap: () {
-                                  final name =
-                                      b.receiver?.name ??
-                                      record.receiverName ??
-                                      '-';
-                                  final phone =
-                                      b.receiver?.phone ??
-                                      record.receiverPhone ??
-                                      '-';
-                                  final address =
-                                      b.receiverAddress?.address ?? '-';
+                                  final name = b.receiver?.name ?? '-';
+                                  final phone = b.receiver?.phone ?? '-';
+                                  final address = b.receiverAddress?.address ?? '-';
                                   Navigator.push(
                                     context,
                                     MaterialPageRoute(
@@ -307,61 +314,45 @@ class _UserDeliveryDetailPageState extends State<UserDeliveryDetailPage> {
                                         fullAddress: address,
                                         lat: null,
                                         lng: null,
-                                        addressDocId: record.receiverAddressId,
+                                        addressDocId: widget.record.receiverAddressId,
                                       ),
                                     ),
                                   );
                                 },
                                 child: _AddressLines(
-                                  name:
-                                      b.receiver?.name ??
-                                      record.receiverName ??
-                                      '-',
-                                  phone:
-                                      b.receiver?.phone ??
-                                      record.receiverPhone ??
-                                      '-',
+                                  name: b.receiver?.name ?? '-',
+                                  phone: b.receiver?.phone ?? '-',
                                   address: b.receiverAddress?.address,
                                 ),
                               ),
                               const SizedBox(height: 10),
 
-                              // === จำนวนสินค้า ===
-                              _SectionCard(
-                                child: _QuantityRow(amount: record.amount),
-                              ),
+                              // จำนวนสินค้า
+                              _SectionCard(child: _QuantityRow(amount: b.amount ?? 0)),
                               const SizedBox(height: 10),
 
-                              // === รายละเอียดสินค้า ===
-                              if ((record.detail ?? '').isNotEmpty) ...[
+                              // รายละเอียดสินค้า
+                              if ((b.detail ?? '').isNotEmpty) ...[
                                 _SectionCard(
                                   title: 'รายละเอียดสินค้า',
-                                  child: Text(
-                                    record.detail!,
-                                    style: const TextStyle(fontSize: 13),
-                                  ),
+                                  child: Text(b.detail!, style: const TextStyle(fontSize: 13)),
                                 ),
                                 const SizedBox(height: 10),
                               ],
 
-                              // === ไรเดอร์ที่ส่งสินค้า (กดดูรายละเอียดได้) ===
+                              // ไรเดอร์
                               _SectionCard(
                                 title: 'ไรเดอร์ที่ส่งสินค้า',
                                 trailingChevron: b.rider != null,
-                                onTap: b.rider == null
-                                    ? null
-                                    : () => _openRiderDetail(b.rider!),
+                                onTap: b.rider == null ? null : () => _openRiderDetail(b.rider!),
                                 child: Text(
                                   b.rider?.name ?? '-',
-                                  style: const TextStyle(
-                                    fontSize: 14,
-                                    fontWeight: FontWeight.w700,
-                                  ),
+                                  style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
                                 ),
                               ),
                               const SizedBox(height: 10),
 
-                              // === รูปภาพ ===
+                              // รูปภาพ
                               _SectionCard(
                                 child: _PhotoTriplet(
                                   slots: photoSlots,
@@ -384,32 +375,58 @@ class _UserDeliveryDetailPageState extends State<UserDeliveryDetailPage> {
   }
 }
 
-// ===== Bundle =====
+// ---------- internal models ----------
+class _Assignment {
+  _Assignment({
+    this.riderId,
+    this.pictureStatus3,
+    this.pictureStatus4,
+    this.accepted,
+  });
+
+  final String? riderId;
+  final String? pictureStatus3;
+  final String? pictureStatus4;
+  final bool? accepted;
+}
+
 class _DeliveryDetailBundle {
   const _DeliveryDetailBundle({
+    this.status,
+    this.amount,
+    this.detail,
+    this.pictureStatus1,
+    this.pictureStatus3,
+    this.pictureStatus4,
     this.sender,
     this.receiver,
-    this.rider,
     this.senderAddress,
     this.receiverAddress,
+    this.rider,
   });
+
+  final String? status;
+  final int? amount;
+  final String? detail;
+
+  final String? pictureStatus1;
+  final String? pictureStatus3;
+  final String? pictureStatus4;
 
   final UserSummary? sender;
   final UserSummary? receiver;
-  final UserSummary? rider;
   final AddressSummary? senderAddress;
   final AddressSummary? receiverAddress;
+  final UserSummary? rider;
 }
 
-// ===== Decorations =====
+// ---------- UI helpers ----------
 BoxDecoration _boxDecoration({double opacity = 0.92}) {
   return BoxDecoration(
     color: Colors.white.withOpacity(opacity),
     borderRadius: BorderRadius.circular(16),
     border: Border.all(color: Colors.black, width: 2),
-    boxShadow: const [
-      BoxShadow(color: Colors.black12, offset: Offset(3, 3), blurRadius: 4),
-    ],
+    boxShadow: const [BoxShadow(color: Colors.black12, offset: Offset(3, 3), blurRadius: 4)],
   );
 }
 
@@ -426,16 +443,13 @@ class _BigCard extends StatelessWidget {
         color: Colors.white.withOpacity(opacity),
         borderRadius: BorderRadius.circular(22),
         border: Border.all(color: Colors.black, width: 3),
-        boxShadow: const [
-          BoxShadow(color: Colors.black26, offset: Offset(4, 5), blurRadius: 8),
-        ],
+        boxShadow: const [BoxShadow(color: Colors.black26, offset: Offset(4, 5), blurRadius: 8)],
       ),
       child: child,
     );
   }
 }
 
-// ===== Widgets =====
 class _StatusTile extends StatelessWidget {
   const _StatusTile({required this.statusText});
   final String statusText;
@@ -446,10 +460,7 @@ class _StatusTile extends StatelessWidget {
       width: double.infinity,
       padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 14),
       decoration: _boxDecoration(),
-      child: Text(
-        statusText,
-        style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w800),
-      ),
+      child: Text(statusText, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w800)),
     );
   }
 }
@@ -480,20 +491,9 @@ class _SectionCard extends StatelessWidget {
             Row(
               children: [
                 Expanded(
-                  child: Text(
-                    title!,
-                    style: const TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w800,
-                    ),
-                  ),
+                  child: Text(title!, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w800)),
                 ),
-                if (trailingChevron)
-                  const Icon(
-                    Icons.chevron_right,
-                    size: 24,
-                    color: Colors.black,
-                  ),
+                if (trailingChevron) const Icon(Icons.chevron_right, size: 24, color: Colors.black),
               ],
             ),
           if (title != null) const SizedBox(height: 6),
@@ -524,15 +524,10 @@ class _AddressLines extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          'ชื่อ $name | เบอร์ $phone',
-          style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
-        ),
+        Text('ชื่อ $name | เบอร์ $phone',
+            style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
         const SizedBox(height: 3),
-        Text(
-          (address?.isNotEmpty ?? false) ? address! : '-',
-          style: const TextStyle(fontSize: 13),
-        ),
+        Text((address?.isNotEmpty ?? false) ? address! : '-', style: const TextStyle(fontSize: 13)),
       ],
     );
   }
@@ -547,16 +542,11 @@ class _QuantityRow extends StatelessWidget {
     return Row(
       children: [
         Expanded(
-          child: Text(
-            'จำนวนสินค้า : $amount',
-            style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w800),
-          ),
+          child: Text('จำนวนสินค้า : $amount',
+              style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w800)),
         ),
         const SizedBox(width: 8),
-        const Text(
-          'ชิ้น',
-          style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800),
-        ),
+        const Text('ชิ้น', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800)),
       ],
     );
   }
@@ -577,21 +567,13 @@ class _PhotoTriplet extends StatelessWidget {
   Widget build(BuildContext context) {
     final three = (slots.length >= 3)
         ? slots.sublist(0, 3)
-        : [
-            ...slots,
-            ...List.generate(
-              3 - slots.length,
-              (_) => const _PhotoSlot(label: ''),
-            ),
-          ];
+        : [...slots, ...List.generate(3 - slots.length, (_) => const _PhotoSlot(label: ''))];
 
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         for (int i = 0; i < three.length; i++) ...[
-          Expanded(
-            child: _PhotoItem(slot: three[i], labelHeight: labelHeight),
-          ),
+          Expanded(child: _PhotoItem(slot: three[i], labelHeight: labelHeight)),
           if (i < three.length - 1) const SizedBox(width: 16),
         ],
       ],
@@ -644,11 +626,7 @@ class _PhotoBox extends StatelessWidget {
       return Container(
         alignment: Alignment.center,
         color: Colors.grey.shade200,
-        child: const Icon(
-          Icons.image_outlined,
-          size: 28,
-          color: Colors.black54,
-        ),
+        child: const Icon(Icons.image_outlined, size: 28, color: Colors.black54),
       );
     }
     return Image.network(
@@ -667,30 +645,6 @@ class _PhotoBox extends StatelessWidget {
         color: Colors.grey.shade200,
         child: const Icon(Icons.broken_image_outlined, size: 28),
       ),
-    );
-  }
-}
-
-// --- row แสดงข้อมูลใน bottom sheet ---
-class _RiderRow extends StatelessWidget {
-  const _RiderRow({
-    required this.icon,
-    required this.label,
-    required this.value,
-  });
-  final IconData icon;
-  final String label;
-  final String value;
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      children: [
-        Icon(icon, size: 20),
-        const SizedBox(width: 10),
-        Text('$label : ', style: const TextStyle(fontWeight: FontWeight.w700)),
-        Expanded(child: Text(value)),
-      ],
     );
   }
 }

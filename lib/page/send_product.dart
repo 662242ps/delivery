@@ -412,16 +412,15 @@ class _SendProductPageState extends State<SendProductPage> {
                                         'กรุณาเลือกที่อยู่ผู้รับสินค้า',
                                     isPlaceholder: _receiverAddressText == null,
                                     onTap: () async {
-                                      final res =
-                                          await Navigator.push<
-                                            ReceiverPickResult
-                                          >(
-                                            context,
-                                            MaterialPageRoute(
-                                              builder: (_) =>
-                                                  const SelectReceiverAddressPage(),
-                                            ),
-                                          );
+                                               final res = await Navigator.push<ReceiverPickResult>(
+                                              context,
+                                              MaterialPageRoute(
+                                                builder: (_) => SelectReceiverAllAddressesPage(
+                                                  excludeUserId: widget.userId, // หรือ currentUserId
+                                                ),
+                                              ),
+                                            );
+
                                       if (res != null && mounted) {
                                         setState(() {
                                           _receiverAddressText =
