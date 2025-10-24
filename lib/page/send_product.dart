@@ -134,6 +134,41 @@ class _SendProductPageState extends State<SendProductPage> {
     }
   }
 
+  // หา docId ตัวเลขที่มากที่สุดในคอลเลกชัน (ข้ามเอกสารที่ id ไม่ใช่ตัวเลข)
+  Future<int> _getMaxNumericDocId(String collectionPath) async {
+    final fs = FirebaseFirestore.instance;
+    final snap = await fs.collection(collectionPath).get(); // ไม่ต้องมี index
+    var maxId = 0;
+    for (final d in snap.docs) {
+      final v = int.tryParse(d.id) ?? 0;
+      if (v > maxId) maxId = v;
+    }
+    return maxId;
+  }
+
+  // จองเลขถัดไปแบบกันชนกัน (สร้างเอกสารเปล่า ๆ ไว้ก่อนเพื่อ "กันเลข")
+  // คืนค่าเป็นเลขที่จองได้ เช่น 1,2,3,...
+  Future<int> _allocateNextDeliveryId() async {
+    final fs = FirebaseFirestore.instance;
+    final col = fs.collection('delivery');
+
+    final baseline = await _getMaxNumericDocId('delivery');
+
+    return await fs.runTransaction<int>((tx) async {
+      var candidate = baseline + 1;
+      while (true) {
+        final ref = col.doc(candidate.toString());
+        final snap = await tx.get(ref);
+        if (!snap.exists) {
+          // กันเลขไว้ก่อนด้วยฟิลด์เล็ก ๆ (จะถูกเขียนทับทีหลัง)
+          tx.set(ref, {'deliveryid': candidate});
+          return candidate;
+        }
+        candidate++;
+      }
+    });
+  }
+
   /* ================= เลือกรูป + เซฟลงโฟลเดอร์แอป ================= */
   Future<void> _pickProductImage() async {
     final src = await showModalBottomSheet<ImageSource>(
@@ -181,26 +216,20 @@ class _SendProductPageState extends State<SendProductPage> {
 
   /* ================= Payload (ตาม ERD ที่เหลืออยู่) ================= */
   Map<String, dynamic> _buildPayload({
-    required String deliveryId,
+    required int deliveryId,
     required String? pictureUrl,
   }) {
     return {
-      'deliveryid': deliveryId,
-      'userid_sender': widget.userId,
+      'deliveryid': deliveryId, // int ตาม ER
+      'userid_sender': _sndUserId ?? widget.userId,
       'userid_receiver': _rcvUserId,
-      'sender_name': _sndName,
-      'phone_sender': _sndPhone,
-      'phone_receiver': _rcvPhone,
-      'receiver_name': _rcvName,
+      'phone_receiver': _rcvPhone, // มีใน ER
       'addressid_sender': _sndAddressId,
       'addressid_receiver': _rcvAddressId,
-      'picture_status1': pictureUrl,
-      'riderid': null,
-      'status': DeliveryStatus.waitingForRider,
+      'picture_status1': pictureUrl, // ของ delivery เท่านั้น
+      'status': DeliveryStatus.waitingForRider, // เริ่มต้นรอไรเดอร์
       'amount': int.tryParse(_amountCtrl.text.trim()) ?? 1,
       'detail': _detailCtrl.text.trim(),
-      'created_at': FieldValue.serverTimestamp(),
-      'updated_at': FieldValue.serverTimestamp(),
     };
   }
 
@@ -208,7 +237,6 @@ class _SendProductPageState extends State<SendProductPage> {
   Future<void> _submit() async {
     FocusScope.of(context).unfocus();
 
-    // ต้องมีที่อยู่ผู้ส่ง/ผู้รับ
     if (_sndAddressId == null || _rcvAddressId == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('กรุณาเลือกที่อยู่ผู้ส่งและผู้รับ')),
@@ -222,18 +250,17 @@ class _SendProductPageState extends State<SendProductPage> {
     try {
       final db = FirebaseFirestore.instance;
 
-      // สร้าง doc ก่อน เพื่อใช้ตั้งชื่อไฟล์
-      final docRef = db.collection('delivery').doc();
-      final id = docRef.id;
+      // 1) จองเลขไอดีถัดไปของ collection 'delivery'
+      final seq = await _allocateNextDeliveryId(); // → 1,2,3,...
 
-      // อัปโหลดรูป (ถ้ามี)
+      // 2) อัปโหลดรูป (ถ้ามี) โดยใช้ seq ที่จองได้
       String? pictureUrl;
       if (_productSavedFile != null) {
         final ext = _productSavedFile!.path.split('.').last.toLowerCase();
         final safeExt = (['jpg', 'jpeg', 'png', 'webp', 'gif'].contains(ext))
             ? ext
             : 'jpg';
-        final path = 'deliveries/$id/picture_status1_$id.$safeExt';
+        final path = 'deliveries/$seq/picture_status1_$seq.$safeExt';
 
         pictureUrl = await _uploadToSupabaseAndGetUrl(
           file: _productSavedFile,
@@ -242,12 +269,16 @@ class _SendProductPageState extends State<SendProductPage> {
         );
       }
 
-      // บันทึก Firestore
-      await docRef.set(_buildPayload(deliveryId: id, pictureUrl: pictureUrl));
+      // 3) เขียนข้อมูลจริง (ทับเอกสารที่กันเลขไว้)
+      final docRef = db.collection('delivery').doc(seq.toString());
+      await docRef.set(
+        _buildPayload(deliveryId: seq, pictureUrl: pictureUrl),
+        SetOptions(merge: true), // merge: true เผื่อกันเลขไว้ก่อนหน้านี้
+      );
 
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('สร้างคำสั่งส่งสินค้าเรียบร้อย (#$id)')),
+        SnackBar(content: Text('สร้างคำสั่งส่งสินค้าเรียบร้อย (#$seq)')),
       );
       _clear();
     } catch (e) {

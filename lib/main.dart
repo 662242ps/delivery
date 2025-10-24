@@ -1,27 +1,39 @@
 import 'package:flutter/material.dart';
-import 'package:animations/animations.dart'; // ✨ ใช้อนิเมชัน Material motion
-
-// Firebase
+import 'package:animations/animations.dart'; // ✨ Material motion
 import 'package:firebase_core/firebase_core.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_database/firebase_database.dart'; // ✅ Realtime Database
 import 'package:flutter_application_4/firebase_options.dart';
-
-// Supabase
 import 'package:supabase_flutter/supabase_flutter.dart';
-
-// หน้าต้นทาง
 import 'package:flutter_application_4/page/login.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-
-  // 🔥 Init Firebase
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
 
-  // 🔧 Firestore persistence (มือถือ/เดสก์ท็อป)
+  if (FirebaseAuth.instance.currentUser == null) {
+    await FirebaseAuth.instance.signInAnonymously();
+  }
+
   FirebaseFirestore.instance.settings = const Settings(
     persistenceEnabled: true,
   );
+
+  // --- RTDB ---
+  final rtdb = FirebaseDatabase.instanceFor(
+    app: Firebase.app(),
+    databaseURL:
+        'https://delivery-test-61f4a-default-rtdb.asia-southeast1.firebasedatabase.app',
+  );
+
+  // smoke test: เขียนค่าเล็ก ๆ ดูว่าขึ้น RTDB จริง
+  try {
+    final uid = FirebaseAuth.instance.currentUser!.uid;
+    await rtdb.ref('debug/lastBoot/$uid').set(ServerValue.timestamp);
+  } catch (e) {
+    debugPrint('RTDB smoke test failed: $e');
+  }
 
   // ⚡️ Init Supabase
   const supabaseUrl = 'https://emunourlkzxdzudisogq.supabase.co';
@@ -44,10 +56,10 @@ class MyApp extends StatelessWidget {
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
         useMaterial3: true,
 
-        // 🧱 ทำพื้นหลังทึบทั้งแอป เพื่อตัดแฟลชเวลาคร่อมหน้า
+        // พื้นหลังทึบ ตัดแฟลชตอนเปลี่ยนหน้า
         scaffoldBackgroundColor: const Color(0xFFF6F6F6),
 
-        // 🎭 ใช้ FadeThrough กับทุกแพลตฟอร์ม (ตั้งครั้งเดียว มีผลทุกหน้า)
+        // 🎭 FadeThrough transition ทุกแพลตฟอร์ม
         pageTransitionsTheme: const PageTransitionsTheme(
           builders: {
             TargetPlatform.android: FadeThroughPageTransitionsBuilder(),

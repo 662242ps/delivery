@@ -1,4 +1,8 @@
 // register.dart — อัปโหลดรูปไป Supabase Storage แล้วเก็บ public URL ไว้ใน Firestore
+// เวอร์ชันไม่ใช้ sequences/unique ใน Firestore
+// - สร้าง doc id เป็นเลขรันนิ่ง 1,2,3,... ด้วยทรานแซกชันที่เอกสารปลายทาง
+// - บล็อกสมัครเฉพาะกรณี (phone,password) ตรงกันทั้งคู่
+// - user_address และ rider_car ใช้ docId = เลขเดียวกับ user
 
 import 'dart:io';
 import 'dart:ui';
@@ -78,6 +82,140 @@ class _RegisterState extends State<Register> {
 
     _scrollCtrl.dispose();
     super.dispose();
+  }
+
+  /* -------------------- Helpers: ลำดับรันนิ่ง (ไม่ใช้ sequences) -------------------- */
+
+  // อ่าน seq สูงสุด แล้ว "วนจองเลข" ด้วยทรานแซกชันที่เอกสารปลายทางเอง
+  Future<String> _allocateNextNumericId() async {
+    final db = FirebaseFirestore.instance;
+
+    // 1) อ่าน seq สูงสุดนอกทรานแซกชัน (เร็ว)
+    final top = await db
+        .collection('user')
+        .orderBy('seq', descending: true)
+        .limit(1)
+        .get();
+
+    int candidate = 1;
+    if (top.docs.isNotEmpty) {
+      final v = top.docs.first.data()['seq'];
+      candidate = (v is num ? v.toInt() : 0) + 1;
+    }
+
+    // 2) วนจองเลข โดยให้ทรานแซกชัน "อ่าน" doc เป้าก่อนทุกครั้ง
+    while (true) {
+      final ref = db.collection('user').doc(candidate.toString());
+      try {
+        await db.runTransaction((txn) async {
+          final snap = await txn.get(ref); // ต้องอ่านเพื่อให้เกิดการตรวจชน
+          if (snap.exists) {
+            throw 'taken'; // มีคนจองไปแล้ว ลองเลขถัดไป
+          }
+          // จองด้วยการสร้างเอกสารพร้อม seq ไปก่อน (กันชน)
+          txn.set(ref, {'seq': candidate});
+        });
+        debugPrint('[seq] reserved id=$candidate');
+        return candidate.toString(); // จองสำเร็จ
+      } catch (e) {
+        candidate += 1; // มีชน ลองเลขถัดไป
+      }
+    }
+  }
+
+  /* -------------------- Helpers: กันซ้ำเฉพาะคู่ (phone,password) -------------------- */
+
+  Future<void> _ensurePhonePasswordPairNotExists({
+    required String phone,
+    required String password,
+  }) async {
+    final dup = await FirebaseFirestore.instance
+        .collection('user')
+        .where('phone', isEqualTo: phone)
+        .where('password', isEqualTo: password)
+        .limit(1)
+        .get();
+
+    if (dup.docs.isNotEmpty) {
+      throw 'มีผู้ใช้ที่ใช้เบอร์และรหัสผ่านชุดนี้อยู่แล้ว';
+    }
+  }
+
+  /* -------------------- Helpers: รูปภาพ -------------------- */
+
+  String _extFromXFileOrDefault(XFile? xf, [String def = 'jpg']) {
+    final n = xf?.name.toLowerCase();
+    if (n != null && n.contains('.')) return n.split('.').last;
+    return def;
+  }
+
+  String _guessMimeByExt(String ext) {
+    final e = ext.toLowerCase();
+    if (e == 'jpg' || e == 'jpeg') return 'image/jpeg';
+    if (e == 'png') return 'image/png';
+    if (e == 'webp') return 'image/webp';
+    if (e == 'gif') return 'image/gif';
+    return 'application/octet-stream';
+  }
+
+  Future<String?> _uploadToSupabaseAndGetUrl({
+    required File? file,
+    required String bucket,
+    required String path, // เช่น 'user_profile/1.jpg'
+  }) async {
+    if (file == null) return null;
+
+    try {
+      final storage = Supabase.instance.client.storage;
+
+      // ทำ path ให้สะอาด + เดา MIME
+      final cleanPath = path.replaceFirst(RegExp(r'^/+'), '');
+      final ext = cleanPath.split('.').last.toLowerCase();
+      final mime = _guessMimeByExt(ext);
+
+      // ⛳️ ใช้ INSERT เท่านั้น (ไม่ UPDATE)
+      // - ไม่ใช้ update()
+      // - ไม่ใช้ upsert:true (กันเงื่อนไข UPDATE)
+      try {
+        final bytes = await file.readAsBytes();
+        await storage
+            .from(bucket)
+            .uploadBinary(
+              cleanPath,
+              bytes,
+              fileOptions: FileOptions(
+                upsert: false, // ❌ ไม่ upsert เพื่อไม่ไปโดน UPDATE policy
+                cacheControl: '3600',
+                contentType: mime,
+              ),
+            );
+      } on StorageException {
+        await storage
+            .from(bucket)
+            .upload(
+              cleanPath,
+              file,
+              fileOptions: FileOptions(
+                upsert: false, // ❌
+                cacheControl: '3600',
+                contentType: mime,
+              ),
+            );
+      }
+
+      // บัคเก็ตคุณตั้ง Public → คืน public URL ได้เลย
+      return storage.from(bucket).getPublicUrl(cleanPath);
+    } on StorageException catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('อัปโหลดรูปไม่สำเร็จ: ${e.message}')),
+      );
+      return null;
+    } catch (e) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('อัปโหลดรูปไม่สำเร็จ: $e')));
+      return null;
+    }
   }
 
   /* -------------------- โปรไฟล์: เลือกกล้อง/แกลฯ -------------------- */
@@ -170,76 +308,6 @@ class _RegisterState extends State<Register> {
     );
     if (result != null) {
       setState(() => _addressPin = result);
-    }
-  }
-
-  /* -------------------- เดา MIME จากนามสกุล -------------------- */
-  String _guessMimeByExt(String ext) {
-    final e = ext.toLowerCase();
-    if (e == 'jpg' || e == 'jpeg') return 'image/jpeg';
-    if (e == 'png') return 'image/png';
-    if (e == 'webp') return 'image/webp';
-    if (e == 'gif') return 'image/gif';
-    return 'application/octet-stream';
-  }
-
-  /* -------------------- อัปโหลดขึ้น Supabase แล้วคืน Public URL -------------------- */
-  Future<String?> _uploadToSupabaseAndGetUrl({
-    required File? file,
-    required String bucket,
-    required String path, // เช่น 'user_profile/<docId>.jpg'
-  }) async {
-    if (file == null) return null;
-
-    try {
-      final client = Supabase.instance.client;
-      final storage = client.storage;
-
-      // ทำ path ให้สะอาด (ไม่มี / นำหน้า)
-      final cleanPath = path.replaceFirst(RegExp(r'^/+'), '');
-
-      // เดา content-type จากนามสกุลไฟล์ใน path
-      final ext = cleanPath.split('.').last;
-      final mime = _guessMimeByExt(ext);
-
-      // 1) พยายามแบบ binary ก่อน (เร็ว/เสถียรกว่าในหลายเคส)
-      try {
-        final bytes = await file.readAsBytes();
-        await storage
-            .from(bucket)
-            .uploadBinary(
-              cleanPath,
-              bytes,
-              fileOptions: FileOptions(
-                upsert: true,
-                cacheControl: '3600',
-                contentType: mime,
-              ),
-            );
-      } on StorageException {
-        // 2) ถ้า binary ล้มเหลว (เช่น Read failed บนอุปกรณ์บางรุ่น) ให้ fallback เป็น upload(File)
-        await storage
-            .from(bucket)
-            .upload(
-              cleanPath,
-              file,
-              fileOptions: FileOptions(
-                upsert: true,
-                cacheControl: '3600',
-                contentType: mime,
-              ),
-            );
-      }
-
-      // ได้ URL สาธารณะ (ต้องเปิด Public bucket + มี policy SELECT)
-      return storage.from(bucket).getPublicUrl(cleanPath);
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('อัปโหลดรูปไม่สำเร็จ: $e')));
-      }
-      return null;
     }
   }
 
@@ -660,6 +728,49 @@ class _RegisterState extends State<Register> {
     ];
   }
 
+  Future<int> _getGlobalLastNo() async {
+    final fs = FirebaseFirestore.instance;
+    final col = fs.collection('user_address');
+
+    final snap = await col.get(); // ไม่ใช้ orderBy/FieldPath → ไม่มี index
+    var maxId = 0;
+    for (final d in snap.docs) {
+      final v =
+          int.tryParse(d.id) ??
+          0; // เอกสาร auto-ID เก่าๆ จะกลายเป็น 0 → ถูกข้าม
+      if (v > maxId) maxId = v;
+    }
+    return maxId;
+  }
+
+  Future<void> insertWithNextNumericDocId({
+    required String collectionPath,
+    required Map<String, dynamic> data,
+  }) async {
+    final fs = FirebaseFirestore.instance;
+    final col = fs.collection(collectionPath);
+
+    final all = await col.get();
+    var maxId = 0;
+    for (final d in all.docs) {
+      final v = int.tryParse(d.id) ?? 0;
+      if (v > maxId) maxId = v;
+    }
+
+    await fs.runTransaction((tx) async {
+      var candidate = maxId + 1;
+      while (true) {
+        final ref = col.doc(candidate.toString());
+        final snap = await tx.get(ref);
+        if (!snap.exists) {
+          tx.set(ref, data);
+          break;
+        }
+        candidate++;
+      }
+    });
+  }
+
   //----------------Register----------------------------
   Future<void> _submit() async {
     FocusScope.of(context).unfocus();
@@ -675,69 +786,120 @@ class _RegisterState extends State<Register> {
 
       if (role == RegisterRole.user) {
         // =============== USER ===============
-        final userDoc = firestore.collection('user').doc();
+        final phone = phoneCtrl.text.trim();
+        final pass = passwordCtrl.text.trim();
 
+        // 1) บล็อกเฉพาะกรณีที่ (phone,password) ตรงกันทั้งคู่
+        await _ensurePhonePasswordPairNotExists(phone: phone, password: pass);
+
+        // 2) จองเลข (doc id) แบบรันนิ่ง 1,2,3,...
+        final String newId = await _allocateNextNumericId();
+        final userRef = firestore.collection('user').doc(newId);
+
+        // 3) อัปโหลดรูปโดยใช้ชื่อไฟล์ตามเลขที่จอง
         final File? profileFile =
             _profileSavedFile ??
             (_profileXFile != null ? File(_profileXFile!.path) : null);
+        final String extProfile = _extFromXFileOrDefault(_profileXFile, 'jpg');
 
         final profileUrl = await _uploadToSupabaseAndGetUrl(
           file: profileFile,
           bucket: kBucketProfile,
-          path: 'user_profile/${userDoc.id}.jpg',
+          path: 'user_profile/$newId.$extProfile',
+          // bucketIsPublic: true, // หรือ false ถ้าเป็น private
         );
 
-        await userDoc.set({
+        // 4) เขียนข้อมูล user (merge ทับค่า seq เดิมได้เหมือนเดิม)
+        await userRef.set({
           "name": nameCtrl.text.trim(),
-          "phone": phoneCtrl.text.trim(),
-          "password": passwordCtrl.text.trim(),
+          "phone": phone,
+          "password": pass,
           "role": "user",
           "picture": profileUrl ?? "",
-        });
+          "seq": int.parse(newId),
+        }, SetOptions(merge: true));
 
-        await firestore.collection('user_address').add({
-          "userid": userDoc.id,
+        // 5) user_address ใช้ doc id = เลขเดียวกับ user
+        final fs = FirebaseFirestore.instance;
+        final col = fs.collection('user_address');
+
+        final payload = {
+          "userid": newId,
           "address":
-              "${addrNoCtrl.text}, ${subdistrictCtrl.text}, ${districtCtrl.text}, ${provinceCtrl.text}, ${zipcodeCtrl.text}",
+              "${addrNoCtrl.text}, ${subdistrictCtrl.text}, "
+              "${districtCtrl.text}, ${provinceCtrl.text}, ${zipcodeCtrl.text}",
           "lat": _addressPin?.latitude,
           "lng": _addressPin?.longitude,
+        };
+
+        await fs.runTransaction((tx) async {
+          // เริ่มจากเลขล่าสุด + 1
+          var candidate = (await _getGlobalLastNo()) + 1;
+
+          while (true) {
+            final ref = col.doc(candidate.toString()); // "1","2","3",...
+            final snap = await tx.get(ref);
+            if (!snap.exists) {
+              tx.set(ref, payload); // จองและเขียนในจังหวะเดียว
+              break;
+            }
+            candidate++; // ถ้าชน ขยับเลขถัดไป
+          }
         });
       } else {
         // =============== RIDER ===============
-        final riderDoc = firestore.collection('user').doc();
+        final phone = riderPhoneCtrl.text.trim();
+        final pass = riderPasswordCtrl.text.trim();
+
+        await _ensurePhonePasswordPairNotExists(phone: phone, password: pass);
+
+        final String newId = await _allocateNextNumericId();
+        final riderRef = firestore.collection('user').doc(newId);
 
         final File? profileFile =
             _profileSavedFile ??
             (_profileXFile != null ? File(_profileXFile!.path) : null);
+        final String extRiderProfile = _extFromXFileOrDefault(
+          _profileXFile,
+          'jpg',
+        );
+
         final profileUrl = await _uploadToSupabaseAndGetUrl(
           file: profileFile,
           bucket: kBucketProfile,
-          path: 'user_profile/${riderDoc.id}.jpg',
+          path: 'user_profile/$newId.$extRiderProfile',
         );
 
-        await riderDoc.set({
+        await riderRef.set({
           "name": riderNameCtrl.text.trim(),
-          "phone": riderPhoneCtrl.text.trim(),
-          "password": riderPasswordCtrl.text.trim(),
+          "phone": phone,
+          "password": pass,
           "role": "rider",
           "picture": profileUrl ?? "",
-        });
+          "seq": int.parse(newId),
+        }, SetOptions(merge: true));
 
         final File? vehicleFile =
             _vehicleSavedFile ??
             (_vehicleXFile != null ? File(_vehicleXFile!.path) : null);
+        final String extVehicle = _extFromXFileOrDefault(_vehicleXFile, 'jpg');
+
         final vehicleUrl = await _uploadToSupabaseAndGetUrl(
           file: vehicleFile,
           bucket: kBucketVehicle,
-          path: 'rider_vehicle/${riderDoc.id}.jpg',
+          path: 'rider_vehicle/$newId.$extVehicle',
         );
 
-        await firestore.collection('rider_car').add({
-          "userid": riderDoc.id,
-          "plate_number": plateCtrl.text.trim(),
-          "car_type": vehicleType,
-          "image_car": vehicleUrl ?? "",
-        });
+        // rider_car ใช้ docId = เลขเดียวกับ user
+        await insertWithNextNumericDocId(
+          collectionPath: 'rider_car',
+          data: {
+            "userid": newId,
+            "plate_number": plateCtrl.text.trim(),
+            "car_type": vehicleType,
+            "image_car": vehicleUrl ?? "",
+          },
+        );
       }
 
       if (!mounted) return;

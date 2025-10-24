@@ -26,7 +26,9 @@ class LocationUtils {
       );
     }
 
-    return Geolocator.getCurrentPosition(desiredAccuracy: LocationAccuracy.high);
+    return Geolocator.getCurrentPosition(
+      desiredAccuracy: LocationAccuracy.high,
+    );
   }
 
   /// Returns `true` if [position] is within [maxDistanceMeters] from
